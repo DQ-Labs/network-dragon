@@ -1,0 +1,9 @@
+# Local Windows fixture development only. No credentials.
+database = "data/app.db"
+frontend = "frontend/dist"
+backup_directory = "data/backups"
+allow_http_local = true
+live_scanning = false
+notifications = false
+allowed_cidrs = []
+allowed_interfaces = []

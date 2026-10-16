@@ -1,0 +1,13 @@
+.git
+.venv
+.tmp
+data
+artifacts
+frontend/node_modules
+frontend/dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+**/__pycache__
+config.local.toml
+.env

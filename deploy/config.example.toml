@@ -1,0 +1,22 @@
+# Copy OUTSIDE the repository; point NETWORK_DRAGON_CONFIG at your private copy.
+# Safe defaults: no live scanning or external delivery.
+database = "/data/app.db"
+frontend = "/app/frontend/dist"
+backup_directory = "/data/backups"
+allow_http_local = false
+trusted_proxy_ips = []    # Exact source IPs of your trusted HTTPS reverse proxy.
+live_scanning = false
+notifications = false
+allowed_cidrs = []        # Supply your authorized IPv4 CIDR, maximum 256 addresses.
+allowed_interfaces = []   # Supply the actual Linux on-link interface.
+discovery_seconds = 120
+ports_seconds = 900
+routine_ports = "top1000" # Or an explicit list, e.g. "22,80,443,3000,8080".
+routine_budget_seconds = 60
+offline_misses = 3
+offline_seconds = 300
+cooldown_seconds = 600
+timezone = "America/New_York"
+retention_observations_days = 30
+retention_events_days = 365
+retention_delivery_days = 90

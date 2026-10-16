@@ -1,0 +1,43 @@
+# Linux VM candidate. Live ARP permissions MUST be validated before use.
+name: network-dragon
+x-common: &common
+  image: ${NETWORK_DRAGON_IMAGE:-network-dragon:0.1.0}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=32m,mode=1777]
+  volumes:
+    - dragon-data:/data
+    - ${NETWORK_DRAGON_CONFIG_FILE:?Set an absolute private TOML path}:/run/config.toml:ro
+  environment:
+    NETWORK_DRAGON_CONFIG: /run/config.toml
+  pids_limit: 100
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+services:
+  web:
+    <<: *common
+    command: [web, --host, 0.0.0.0]
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  worker:
+    <<: *common
+    command: [worker]
+    network_mode: host
+    # No capabilities granted by this unvalidated candidate. ARP fails closed
+    # until the documented minimum-permission trial passes.
+    profiles: [worker]
+volumes:
+  dragon-data:
