@@ -164,19 +164,34 @@ def create_app(config: Config | None = None, engine=None):
             raise HTTPException(404, "Record not found")
         return value
 
-    def device_record(session, device):
-        result = record(device)
-        network = session.get(Network, device.network_id)
-        result["stale"] = (
-            time.time() - device.last_evidence > config.discovery_seconds * 3
-            or network.health != "healthy"
+    def enrich_devices(session, items):
+        if not items:
+            return items
+        health = dict(
+            session.execute(
+                select(Network.id, Network.health).where(
+                    Network.id.in_({item["network_id"] for item in items})
+                )
+            ).all()
         )
-        result["open_ports"] = session.scalar(
-            select(func.count())
-            .select_from(CurrentPort)
-            .where(CurrentPort.device_id == device.id, CurrentPort.state == "open")
+        open_ports = dict(
+            session.execute(
+                select(CurrentPort.device_id, func.count())
+                .where(
+                    CurrentPort.device_id.in_([item["id"] for item in items]),
+                    CurrentPort.state == "open",
+                )
+                .group_by(CurrentPort.device_id)
+            ).all()
         )
-        return result
+        now = time.time()
+        for item in items:
+            item["stale"] = (
+                now - item["last_evidence"] > config.discovery_seconds * 3
+                or health.get(item["network_id"]) != "healthy"
+            )
+            item["open_ports"] = open_ports.get(item["id"], 0)
+        return items
 
     @app.get("/health/live")
     def live():
@@ -307,17 +322,16 @@ def create_app(config: Config | None = None, engine=None):
         if presence:
             stmt = stmt.where(Device.presence == presence)
         stmt = stmt.order_by(
-            {"name": Device.name, "ip": Device.ip, "last_seen": Device.last_seen.desc()}[sort]
+            {"name": Device.name, "ip": Device.ip, "last_seen": Device.last_seen.desc()}[sort],
+            Device.id,
         )
         data = page(session, stmt, offset, limit)
-        data["items"] = [
-            device_record(session, d) for d in session.scalars(stmt.offset(offset).limit(limit))
-        ]
+        data["items"] = enrich_devices(session, data["items"])
         return data
 
     @app.get("/api/v1/devices/{id_}", dependencies=protected)
     def device(id_: str, session=Depends(db)):
-        result = device_record(session, get(session, Device, id_))
+        result = enrich_devices(session, [record(get(session, Device, id_))])[0]
         result["addresses"] = [
             record(a)
             for a in session.scalars(
@@ -590,21 +604,19 @@ def create_app(config: Config | None = None, engine=None):
     @app.get("/api/v1/settings", dependencies=protected)
     def settings(session=Depends(db)):
         pause = session.get(Setting, "delivery_paused")
+        test = session.get(Setting, "notification_test")
+        last_backup = session.get(Setting, "last_backup")
         return {
             **config.model_dump(exclude={"nmap", "database", "frontend", "backup_directory"}),
             "credentials_configured": bool(secret("PUSHOVER_TOKEN") and secret("PUSHOVER_USER")),
             "delivery_paused": bool(pause and pause.value.get("paused")),
             "port_notifications": "never",
-            "notification_test": session.get(Setting, "notification_test").value
-            if session.get(Setting, "notification_test")
-            else None,
+            "notification_test": test.value if test else None,
             "version": "0.1.0",
             "database_bytes": Path(config.database).stat().st_size
             if Path(config.database).exists()
             else 0,
-            "last_backup": session.get(Setting, "last_backup").value
-            if session.get(Setting, "last_backup")
-            else None,
+            "last_backup": last_backup.value if last_backup else None,
         }
 
     @app.get("/{path:path}")

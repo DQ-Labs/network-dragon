@@ -179,6 +179,7 @@ export function Detail({ id }: { id: string }) {
           <Pager
             total={ports.data?.total || 0}
             offset={portOffset}
+            limit={ports.data?.limit}
             setOffset={setPortOffset}
           />
         </Panel>

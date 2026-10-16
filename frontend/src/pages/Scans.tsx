@@ -183,6 +183,7 @@ export function Scans() {
         <Pager
           total={Math.max(data?.runs.total || 0, data?.jobs.total || 0)}
           offset={offset}
+          limit={data?.runs.limit}
           setOffset={setOffset}
         />
       </Panel>

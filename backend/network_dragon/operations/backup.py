@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -55,8 +56,23 @@ def restore(source: Path, destination: Path):
         raise ValueError(
             "Restore requires a new destination; stop services and preserve the existing database"
         )
-    manifest = json.loads(source.with_suffix(".json").read_text())
-    if hashlib.sha256(source.read_bytes()).hexdigest() != manifest["sha256"]:
+    manifest_path = source.with_suffix(".json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(
+            f"Cannot read backup manifest {manifest_path}; keep the matching .json beside the .db"
+        ) from exc
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError(f"Backup manifest {manifest_path} must contain valid UTF-8 JSON") from exc
+    checksum = manifest.get("sha256") if isinstance(manifest, dict) else None
+    if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", checksum):
+        raise ValueError(f"Backup manifest {manifest_path} requires a valid SHA-256 checksum")
+    try:
+        actual_checksum = hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ValueError(f"Cannot read backup database {source}") from exc
+    if actual_checksum != checksum.lower():
         raise ValueError("Backup checksum mismatch")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with (

@@ -71,7 +71,12 @@ export function ActivityPage() {
         subtitle="Baseline observations are marked. Port changes never generate notifications."
       >
         <Events items={data?.items || []} />
-        <Pager total={data?.total || 0} offset={offset} setOffset={setOffset} />
+        <Pager
+          total={data?.total || 0}
+          offset={offset}
+          limit={data?.limit}
+          setOffset={setOffset}
+        />
       </Panel>
     </>
   );

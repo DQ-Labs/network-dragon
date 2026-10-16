@@ -1,3 +1,6 @@
+import json
+import time
+
 import pytest
 from conftest import xml
 from fastapi.testclient import TestClient
@@ -6,11 +9,11 @@ from network_dragon.auth.service import set_password
 from network_dragon.operations.backup import backup, restore
 from network_dragon.operations.retention import cleanup
 from network_dragon.persistence.db import engine_for, transaction
-from network_dragon.persistence.models import Device, Event, Setting
+from network_dragon.persistence.models import Device, Event, Network, Setting
 from network_dragon.scanner.validation import ports, scope
 from network_dragon.scanner.xml import parse_xml
 from network_dragon.worker.queue import acquire, claim, fenced
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 
@@ -127,6 +130,111 @@ def test_backup_restore_paused_and_history_consistent(env, ingest_run, tmp_path)
         assert s.get(Setting, "delivery_paused").value["paused"]
         assert s.scalar(select(Device))
     engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "manifest, message",
+    [
+        (None, "Cannot read backup manifest"),
+        (b"{broken", "valid UTF-8 JSON"),
+        (b"\xff", "valid UTF-8 JSON"),
+        (b"[]", "valid SHA-256"),
+        (b"{}", "valid SHA-256"),
+        (b'{"sha256": 123}', "valid SHA-256"),
+        (b'{"sha256": "bad"}', "valid SHA-256"),
+        (json.dumps({"sha256": "0" * 64}).encode(), "checksum mismatch"),
+    ],
+)
+def test_restore_rejects_invalid_manifest_before_creating_destination(tmp_path, manifest, message):
+    source = tmp_path / "backup.db"
+    source.write_bytes(b"backup contents")
+    if manifest is not None:
+        source.with_suffix(".json").write_bytes(manifest)
+    destination = tmp_path / "new" / "restored.db"
+    with pytest.raises(ValueError, match=message):
+        restore(source, destination)
+    assert not destination.parent.exists()
+    assert source.read_bytes() == b"backup contents"
+
+
+def test_restore_reports_missing_database(tmp_path):
+    source = tmp_path / "missing.db"
+    source.with_suffix(".json").write_text(json.dumps({"sha256": "0" * 64}))
+    destination = tmp_path / "restored.db"
+    with pytest.raises(ValueError, match="Cannot read backup database"):
+        restore(source, destination)
+    assert not destination.exists()
+
+
+def test_device_list_batches_enrichment_and_preserves_pagination(browser, env, ingest_run):
+    now = time.time()
+    ingest_run(xml(at=now))
+    ingest_run(
+        xml(
+            [("192.0.2.1", None, [(22, "open", {}), (80, "closed", {})])],
+            coverage="22,80",
+            at=now + 1,
+        ),
+        kind="ports",
+    )
+    with transaction(env[0]) as session:
+        first = session.scalar(select(Device))
+        first.name = "review-device-00"
+        first_id = first.id
+        unhealthy = Network(name="Unhealthy", cidr="198.51.100.0/24", health="unknown")
+        session.add(unhealthy)
+        session.flush()
+        for i in range(1, 50):
+            session.add(
+                Device(
+                    network_id=unhealthy.id if i == 49 else env[2],
+                    identity=f"review-{i}",
+                    ip=f"192.0.2.{i + 1}",
+                    name=f"review-device-{i:02d}",
+                    first_seen=now,
+                    last_seen=now,
+                    last_evidence=0 if i == 48 else now,
+                )
+            )
+    sign_in(browser)
+    queries = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT") and any(
+            f"FROM {table}" in statement for table in ("devices", "networks", "current_ports")
+        ):
+            queries.append(statement)
+
+    event.listen(env[0], "before_cursor_execute", capture)
+    try:
+        for limit in (1, 50):
+            queries.clear()
+            response = browser.get(
+                "/api/v1/devices", params={"q": "review-device", "sort": "name", "limit": limit}
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["total"] == 50 and data["limit"] == limit and data["offset"] == 0
+            assert len(data["items"]) == limit
+            assert len(queries) == 4
+            assert data["items"][0]["open_ports"] == 1
+            assert data["items"][0]["stale"] is False
+        assert all(d["open_ports"] == 0 for d in data["items"][1:])
+        assert [d["stale"] for d in data["items"]] == [False] * 48 + [True, True]
+        second_page = browser.get(
+            "/api/v1/devices",
+            params={"q": "review-device", "sort": "name", "offset": 48, "limit": 7},
+        ).json()
+        assert [d["name"] for d in second_page["items"]] == ["review-device-48", "review-device-49"]
+        assert second_page["offset"] == 48 and second_page["limit"] == 7
+        queries.clear()
+        empty = browser.get("/api/v1/devices", params={"q": "no-such-device"}).json()
+        assert empty["items"] == [] and empty["total"] == 0
+        assert len(queries) == 2
+    finally:
+        event.remove(env[0], "before_cursor_execute", capture)
+    detail = browser.get(f"/api/v1/devices/{first_id}").json()
+    assert detail["open_ports"] == 1 and detail["stale"] is False
 
 
 def test_retention_preserves_event_evidence(env, ingest_run):

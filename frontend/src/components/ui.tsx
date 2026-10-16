@@ -130,29 +130,33 @@ export function Events({
 export function Pager({
   total,
   offset,
+  limit,
   setOffset,
 }: {
   total: number;
   offset: number;
+  limit: number | undefined;
   setOffset: (n: number) => void;
 }) {
   return (
     <div className="pager">
       <span>
-        {total
-          ? `${offset + 1}–${Math.min(offset + 50, total)} of ${total}`
-          : "0 records"}
+        {limit
+          ? total
+            ? `${offset + 1}–${Math.min(offset + limit, total)} of ${total}`
+            : "0 records"
+          : "Loading…"}
       </span>
       <div>
         <button
-          disabled={!offset}
-          onClick={() => setOffset(Math.max(0, offset - 50))}
+          disabled={!limit || !offset}
+          onClick={() => limit && setOffset(Math.max(0, offset - limit))}
         >
           Previous
         </button>
         <button
-          disabled={offset + 50 >= total}
-          onClick={() => setOffset(offset + 50)}
+          disabled={!limit || offset + limit >= total}
+          onClick={() => limit && setOffset(offset + limit)}
         >
           Next
         </button>

@@ -152,7 +152,12 @@ export function Notifications() {
         ) : (
           <Empty>No notification delivery records.</Empty>
         )}
-        <Pager total={data?.total || 0} offset={offset} setOffset={setOffset} />
+        <Pager
+          total={data?.total || 0}
+          offset={offset}
+          limit={data?.limit}
+          setOffset={setOffset}
+        />
       </Panel>
     </>
   );

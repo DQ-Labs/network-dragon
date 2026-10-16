@@ -55,3 +55,24 @@ test('untrusted hostname is rendered as text', async ({ page }) => {
   await page.getByLabel('Display name').fill('');
   await page.getByRole('button', { name: 'Save details' }).click();
 });
+
+test('pagination follows the page size returned by the API', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('Administrator password', { exact: true }).fill(process.env.DRAGON_TEST_PASSWORD!);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'A little clarity. A lot less noise.' })).toBeVisible();
+  await page.route('**/api/v1/devices?**', async route => {
+    const offset = Number(new URL(route.request().url()).searchParams.get('offset') || 0);
+    await route.fulfill({ json: { items: [], total: 5, offset, limit: 2 } });
+  });
+  await page.goto('/devices');
+  await expect(page.getByText('1–2 of 5', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByText('3–4 of 5', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.getByText('5–5 of 5', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Next', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Previous', exact: true }).click();
+  await expect(page.getByText('3–4 of 5', { exact: true })).toBeVisible();
+});

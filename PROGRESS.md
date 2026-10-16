@@ -14,14 +14,16 @@ Updated October 16, 2026. Independent implementation; no NetAlertX code/assets. 
 
 ## Verified locally
 
-- **78 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore, retention, reused-IP port bindings, service evidence freshness, and searchable history). Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
+- **88 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore including invalid manifests, retention, reused-IP port bindings, service evidence freshness, searchable history, and bounded device-list queries). Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
 - Ruff check and format pass; mypy passes for 26 backend source files.
 - TypeScript/Vite production build and Prettier check pass; dependency locks resolve.
-- **2 Playwright workflows pass**: authenticated fixture browsing/editing, evidence search, quiet history, disabled live execution, responsive layouts, themes, logout, and hostile-label text rendering. Desktop and dark/light mobile screenshots visually reviewed in `artifacts/`. `scripts/check_browser.py` now owns isolated setup/server teardown.
+- **3 Playwright workflows pass**: authenticated fixture browsing/editing, evidence search, quiet history, disabled live execution, responsive layouts, themes, logout, hostile-label text rendering, and pagination using the API's returned page size. Initial desktop and dark/light mobile screenshots were visually reviewed in `artifacts/`. `scripts/check_browser.py` owns isolated setup/server teardown.
 - Wheel built offline from cached dependencies; verified application/migration contents, installed into an isolated target, and successfully applied migrations using the installed wheel.
 - GitHub CI is defined but has not run remotely. Docker is unavailable here; no Linux/container/Nmap-privilege validation is claimed.
 
 ## Decisions / limits
+
+- Review follow-up: device-list enrichment uses four queries independent of page size (two for empty pages), including batched network health and open-port counts. Settings lookups are reused. Pagers use response limits. Restore reports missing/unreadable or malformed manifests, invalid checksums, and unreadable source databases before creating a destination.
 
 - Keep installation settings in validated TOML; UI edits domain controls and reports runtime settings. Server-side opaque sessions need no signing secret.
 - Keep normalized observations/evidence, not long-lived raw XML. Original fixtures remain in `tests/fixtures/nmap`.

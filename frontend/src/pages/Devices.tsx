@@ -78,7 +78,12 @@ export function Devices() {
         ) : (
           <DeviceTable items={data?.items || []} />
         )}
-        <Pager total={data?.total || 0} offset={offset} setOffset={setOffset} />
+        <Pager
+          total={data?.total || 0}
+          offset={offset}
+          limit={data?.limit}
+          setOffset={setOffset}
+        />
       </Panel>
     </>
   );
