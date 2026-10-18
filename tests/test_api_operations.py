@@ -9,11 +9,11 @@ from network_dragon.auth.service import set_password
 from network_dragon.operations.backup import backup, restore
 from network_dragon.operations.retention import cleanup
 from network_dragon.persistence.db import engine_for, transaction
-from network_dragon.persistence.models import Device, Event, Network, Setting
+from network_dragon.persistence.models import Device, Event, HostObservation, Network, Run, Setting
 from network_dragon.scanner.validation import ports, scope
 from network_dragon.scanner.xml import parse_xml
 from network_dragon.worker.queue import acquire, claim, fenced
-from sqlalchemy import event, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 
@@ -244,6 +244,27 @@ def test_retention_preserves_event_evidence(env, ingest_run):
         e = s.scalar(select(Event).where(Event.type == "device.new"))
         assert e.facts["ip"] == "192.0.2.1"
         assert e.run_id
+
+
+def test_retention_drains_backlog_beyond_one_batch(env, ingest_run):
+    hosts = [(f"192.0.2.{i}", f"02:00:00:00:00:0{i}", []) for i in range(1, 4)]
+    for at in range(1000, 1600, 120):
+        ingest_run(xml(hosts, at=at))
+    with Session(env[0]) as s:
+        assert s.scalar(select(func.count()).select_from(HostObservation)) == 15
+    removed = cleanup(env[0], env[1], 1000 + 31 * 86400, batch=2)
+    assert removed["host_observations"] == 15
+    with Session(env[0]) as s:
+        assert s.scalar(select(func.count()).select_from(HostObservation)) == 0
+        # Runs without remaining references are pruned; event-referenced runs survive.
+        assert s.scalar(select(func.count()).select_from(Run)) == 1
+
+
+def test_retention_respects_time_budget(env, ingest_run):
+    hosts = [(f"192.0.2.{i}", f"02:00:00:00:00:0{i}", []) for i in range(1, 4)]
+    ingest_run(xml(hosts))
+    removed = cleanup(env[0], env[1], 1000 + 31 * 86400, batch=1, budget_seconds=0)
+    assert removed["host_observations"] == 1
 
 
 def test_worker_lease_fences_stale_result(env):

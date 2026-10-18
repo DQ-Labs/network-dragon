@@ -14,7 +14,7 @@ Updated October 16, 2026. Independent implementation; no NetAlertX code/assets. 
 
 ## Verified locally
 
-- **88 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore including invalid manifests, retention, reused-IP port bindings, service evidence freshness, searchable history, and bounded device-list queries). Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
+- **93 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore including invalid manifests, retention, reused-IP port bindings, service evidence freshness, searchable history, and bounded device-list queries). Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
 - Ruff check and format pass; mypy passes for 26 backend source files.
 - TypeScript/Vite production build and Prettier check pass; dependency locks resolve.
 - **3 Playwright workflows pass**: authenticated fixture browsing/editing, evidence search, quiet history, disabled live execution, responsive layouts, themes, logout, hostile-label text rendering, and pagination using the API's returned page size. Initial desktop and dark/light mobile screenshots were visually reviewed in `artifacts/`. `scripts/check_browser.py` owns isolated setup/server teardown.
@@ -23,6 +23,7 @@ Updated October 16, 2026. Independent implementation; no NetAlertX code/assets. 
 
 ## Decisions / limits
 
+- Review follow-up (Oct 17): retention now drains its backlog in short 500-row transactions within a 10-second worker budget (CLI `retention` runs unbounded), and a port that an earlier unambiguous aggregate proved closed/filtered is recorded as a `port.state` change when it opens instead of `port.baseline`.
 - Review follow-up: device-list enrichment uses four queries independent of page size (two for empty pages), including batched network health and open-port counts. Settings lookups are reused. Pagers use response limits. Restore reports missing/unreadable or malformed manifests, invalid checksums, and unreadable source databases before creating a destination.
 
 - Keep installation settings in validated TOML; UI edits domain controls and reports runtime settings. Server-side opaque sessions need no signing secret.

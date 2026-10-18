@@ -114,7 +114,7 @@ def main():
 
             from network_dragon.operations.retention import cleanup
 
-            print(cleanup(engine, config, time.time()))
+            print(cleanup(engine, config, time.time(), budget_seconds=None))
     except (ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)

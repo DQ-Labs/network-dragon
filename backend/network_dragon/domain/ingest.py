@@ -397,6 +397,26 @@ def ingest(
     return run
 
 
+def prior_aggregate(session, device, run, at):
+    """Ports an earlier unambiguous aggregate proved to be in one state, without materializing them."""
+    observation = session.scalar(
+        select(PortObservation)
+        .where(
+            PortObservation.device_id == device.id,
+            PortObservation.port == 0,
+            PortObservation.run_id != run.id,
+            PortObservation.observed_at < at,
+        )
+        .order_by(PortObservation.observed_at.desc())
+        .limit(1)
+    )
+    source = session.get(Run, observation.facts["coverage_run"]) if observation else None
+    if not observation or not source:
+        return "", set()
+    omitted = set(source.coverage.get("ports", [])) - set(observation.facts.get("explicit", []))
+    return observation.facts["aggregate"], omitted
+
+
 def apply_ports(session, network, device, run, host, coverage, at, config):
     current = {
         p.port: p
@@ -421,6 +441,7 @@ def apply_ports(session, network, device, run, host, coverage, at, config):
         )
         for number in current.keys() & coverage - explicit.keys():
             explicit[number] = Port(number, host.aggregate_state, "aggregate")
+    aggregate: tuple[str, set[int]] | None = None
     for port in explicit.values():
         facts = port.facts()
         session.add(
@@ -444,6 +465,10 @@ def apply_ports(session, network, device, run, host, coverage, at, config):
         if previous and at <= previous.observed_at:
             continue
         if previous is None:
+            if aggregate is None:
+                aggregate = prior_aggregate(session, device, run, at)
+            state, omitted = aggregate
+            before = Port(port.port, state, "aggregate").facts() if port.port in omitted else None
             session.add(
                 CurrentPort(
                     device_id=device.id,
@@ -454,6 +479,20 @@ def apply_ports(session, network, device, run, host, coverage, at, config):
                     facts=facts,
                 )
             )
+            if before and before["state"] != port.state:
+                # Previously covered and proven by an aggregate: a real change, not a baseline.
+                emit(
+                    session,
+                    network,
+                    device,
+                    run,
+                    "port.state",
+                    at,
+                    {"port": port.port, "before": before, "after": facts},
+                    config,
+                    str(port.port),
+                )
+                continue
             emit(
                 session,
                 network,
