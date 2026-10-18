@@ -24,7 +24,18 @@ Every pull request runs `scripts/container_check.py` against the image built fro
 - a sign-in carrying `tailscale serve`'s headers from 127.0.0.1 passes the same-origin check and gets a `Secure` cookie, while the same request without `X-Forwarded-Proto` gets 403;
 - a live network created through the API is picked up by the scheduled worker, and both targets appear as devices with the right MAC and IP.
 
-The `arm64` job runs with `--emulated`. QEMU user mode does not translate the SIOCETHTOOL ioctl behind psutil's `net_if_stats()`, so on arm64 the script skips only `interface_health`. It still builds the scan with `scanner.process.arguments()`, runs `route_health()`, and runs nmap from the capability-less Python worker. It also skips the scheduled-worker end-to-end check. On the Pi, psutil talks to the real kernel; step 6 confirms that.
+The `arm64` job runs with `--emulated`, and it does **not** prove ARP on arm64. Under QEMU user mode, nmap runs inside an emulator on the runner's x86 kernel, and its raw-device path fails ("Failed to open device"). It fails the same way as root with NET_RAW effective, so the cause is the emulation, not the capability set. QEMU also lacks psutil's SIOCETHTOOL ioctl. The arm64 job does prove the following on the arm64 image:
+
+- uid and gid are 10001
+- nmap carries `cap_net_raw+ep`
+- there are no setuid or setgid files
+- nmap and `ip` run
+- `init` and `create-admin` work on the named volume
+- the web container's capabilities, healthcheck and loopback-only bind are correct
+- the tailscale-serve origin flow works
+- a live network can be created through the API
+
+ARP as UID 10001 on arm64 is checked in step 6 on dragon itself.
 
 `tests/test_proxy_origin.py` covers the proxy behaviour again outside containers.
 
@@ -32,7 +43,7 @@ These things have **not** been proven and must be checked on dragon:
 
 - That Docker 26.1.5 on the Pi keeps nmap's file capability when it pulls the image (step 2 checks this).
 - That memory limits are enforced. Raspberry Pi kernels often ship with the memory cgroup off (step 1).
-- ARP on the real `eth0` and VLAN 30, through the physical switch, rather than a Linux bridge. The QEMU job emulates arm64 user space on an x86 kernel, not the Pi's kernel.
+- ARP on arm64 at all, and on the real `eth0` and VLAN 30 through the physical switch rather than a Linux bridge. ARP was proven natively on amd64 only.
 - The real `tailscale serve` on dragon, and running alongside Bluehood for memory and ports.
 - The Debian `docker-compose` package version and its Compose features (step 1).
 - Firewall, IPv6 policy, and Pushover delivery (see the end of this page).

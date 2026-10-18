@@ -18,10 +18,11 @@ the part of dragon's eth0, then proves:
 5. End to end: a live network created through the API is discovered by the
    scheduled worker, and the targets appear as devices with their MACs.
 
---emulated (job "arm64", QEMU user mode on an x86 kernel): QEMU does not translate
-the SIOCETHTOOL ioctl that psutil's net_if_stats() issues, so step 1 calls
-scanner.process.arguments() and route_health() and runs nmap itself instead of
-execute(), and step 5 stops after creating the network.
+--emulated (job "arm64", QEMU user mode on an x86 kernel): QEMU translates neither
+psutil's SIOCETHTOOL ioctl nor nmap's raw-device path (even root with NET_RAW fails
+identically), so ARP there is diagnosed, not proven: steps 1-2 are reported as not
+proven when the scan fails, and step 5 stops after creating the network. The image,
+web, healthcheck and proxy checks still run on the arm64 image.
 
 Standard library only; needs Docker with the Compose plugin and must run as a user
 that can create bridge networks. Leaves nothing behind.
