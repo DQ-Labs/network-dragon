@@ -1,11 +1,14 @@
 import json
+import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 from conftest import xml
 from fastapi.testclient import TestClient
 from network_dragon.api.app import create_app
 from network_dragon.auth.service import set_password
+from network_dragon.operations import backup as backups
 from network_dragon.operations.backup import backup, restore
 from network_dragon.operations.retention import cleanup
 from network_dragon.persistence.db import engine_for, transaction
@@ -130,6 +133,44 @@ def test_backup_restore_paused_and_history_consistent(env, ingest_run, tmp_path)
         assert s.get(Setting, "delivery_paused").value["paused"]
         assert s.scalar(select(Device))
     engine.dispose()
+
+
+@pytest.mark.parametrize("corrupt", ["", "backup", "restore"])
+def test_backup_and_restore_close_connections_and_drop_bad_copies(
+    env, ingest_run, tmp_path, monkeypatch, corrupt
+):
+    opened, stage = [], {"now": "backup"}
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if corrupt == stage["now"] and "integrity_check" in sql:
+                return SimpleNamespace(fetchone=lambda: ("*** in database main ***",))
+            return super().execute(sql, *args)
+
+    def connect(*args, **kwargs):
+        opened.append(sqlite3.connect(*args, factory=Connection, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(backups, "sqlite3", SimpleNamespace(connect=connect))
+    ingest_run(xml())
+    restored = tmp_path / "restored.db"
+    if corrupt == "backup":
+        with pytest.raises(ValueError, match="integrity"):
+            backup(env[1])
+        assert not list((tmp_path / "backups").iterdir())
+    else:
+        destination = backup(env[1])
+        stage["now"] = "restore"
+        if corrupt:
+            with pytest.raises(ValueError, match="integrity"):
+                restore(destination, restored)
+        else:
+            restore(destination, restored)
+        assert restored.exists() == (not corrupt)
+    assert len(opened) >= 2
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 @pytest.mark.parametrize(
