@@ -196,6 +196,10 @@ test('keyboard search, column sorting, and navigation landmarks', async ({ page 
   await expect(search).toBeFocused();
   await page.keyboard.type('compute');
   await expect(page.locator('tbody tr')).toHaveCount(2);
+  // The MAC vendor is shown under the device and is searchable.
+  await search.fill('raspberry');
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await expect(deviceRow(page, 'home-bridge.lab')).toContainText('Raspberry Pi Trading');
   await search.fill('');
   await page.getByRole('button', { name: 'Device', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Device' })).toHaveAttribute('aria-sort', 'ascending');

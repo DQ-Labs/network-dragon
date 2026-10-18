@@ -75,6 +75,7 @@ def summary(item):
         "hostname": item["hostname"],
         "ip": item["ip"],
         "mac": item["mac"],
+        "vendor": item["vendor"],
         "presence": item["presence"],
         "open_ports": item["open_ports"],
         "last_seen": iso(item["last_seen"]),
@@ -149,7 +150,7 @@ def agent_server(engine, config):
         offset: Offset = 0,
         limit: Limit = 25,
     ) -> str:
-        """List devices by IP. `query` matches name, hostname, IP or MAC."""
+        """List devices by IP. `query` matches name, hostname, IP, MAC or MAC vendor."""
         with Session(engine) as session:
             data = page(session, device_query(query, presence or ""), offset, limit)
             items = enrich_devices(session, config, data["items"])

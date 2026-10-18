@@ -27,7 +27,8 @@ def fixture(at, ports=False, changed=False):
         host = SubElement(root, 'host')
         SubElement(host, 'status', state='up', reason='arp-response')
         SubElement(host, 'address', addr=f'192.0.2.{i}', addrtype='ipv4')
-        SubElement(host, 'address', addr=f'02:44:52:41:47:0{i}', addrtype='mac')
+        # Nmap adds the OUI vendor to the MAC address when it knows one.
+        SubElement(host, 'address', addr=f'02:44:52:41:47:0{i}', addrtype='mac', **({'vendor': 'Raspberry Pi Trading'} if i == 6 else {}))
         SubElement(SubElement(host, 'hostnames'), 'hostname', name=name)
         if ports:
             container = SubElement(host, 'ports')

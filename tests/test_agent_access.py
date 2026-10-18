@@ -46,7 +46,11 @@ def token(env):
 @pytest.fixture
 def inventory(env, ingest_run):
     now = time.time()
-    ingest_run(xml([("192.0.2.1", "02:00:00:00:00:01", []), ("192.0.2.2", None, [])], at=now))
+    hosts = [
+        ("192.0.2.1", "02:00:00:00:00:01", [], "Raspberry Pi Trading"),
+        ("192.0.2.2", None, []),
+    ]
+    ingest_run(xml(hosts, at=now))
     ingest_run(
         xml(
             [("192.0.2.1", None, [(22, "open", {"name": "ssh", "product": "OpenSSH"})])],
@@ -87,6 +91,9 @@ def test_token_reads_devices_events_and_stamps_usage_cheaply(client, env, token,
     assert client.get("/api/v1/devices").status_code == 401
     devices = client.get("/api/v1/devices", headers=token).json()
     assert devices["total"] == 2 and devices["items"][0]["name"] == "nas"
+    assert devices["items"][0]["vendor"] == "Raspberry Pi Trading"
+    search = client.get("/api/v1/devices", params={"q": "Pi Trading"}, headers=token).json()
+    assert [d["ip"] for d in search["items"]] == ["192.0.2.1"]
     assert client.get("/api/v1/events", headers=token).json()["total"] >= 2
     assert client.get(f"/api/v1/devices/{inventory['192.0.2.1']}", headers=token).json()["ip"]
     with Session(env[0]) as s:
@@ -226,10 +233,13 @@ def test_mcp_tools_return_compact_inventory(client, env, token, inventory):
     paged = call(client, token, "list_devices", limit=1, presence="online")
     assert paged["total"] == 2 and paged["next_offset"] == 1 and len(paged["items"]) == 1
     assert call(client, token, "list_devices", query="02:00:00:00:00:01")["total"] == 1
+    assert nas["vendor"] == "Raspberry Pi Trading" and "vendor" not in devices["items"][1]
+    assert call(client, token, "list_devices", query="raspberry")["total"] == 1
     assert call(client, token, "list_devices", presence="offline")["total"] == 0
 
     detail = call(client, token, "get_device", device="192.0.2.1")
     assert detail["id"] == inventory["192.0.2.1"] and detail["mac"] == "02:00:00:00:00:01"
+    assert detail["vendor"] == "Raspberry Pi Trading"
     assert detail["ports"] == [
         {"port": 22, "state": "open", "service": "ssh OpenSSH", "seen": detail["ports"][0]["seen"]}
     ]

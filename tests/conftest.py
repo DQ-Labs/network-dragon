@@ -31,12 +31,13 @@ def xml(hosts=None, *, coverage="", complete=True, total=8, at=1000, aggregates=
 
     hosts = [("192.0.2.1", "02:00:00:00:00:01", [])] if hosts is None else hosts
     elements = []
-    for ip, mac, observations in hosts:
+    for ip, mac, observations, *vendor in hosts:
         elements.append(
             f'<host timedout="{str(timeout).lower()}"><status state="up"/><address addr="{ip}" addrtype="ipv4"/>'
         )
         if mac:
-            elements.append(f'<address addr="{mac}" addrtype="mac"/>')
+            extra = f" vendor={quoteattr(vendor[0])}" if vendor else ""
+            elements.append(f'<address addr="{mac}" addrtype="mac"{extra}/>')
         elements.append("<ports>")
         for number, state, service in observations:
             attrs = " ".join(f"{k}={quoteattr(v)}" for k, v in service.items())

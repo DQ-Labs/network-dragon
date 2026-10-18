@@ -220,6 +220,10 @@ export function Detail({ id }: { id: string }) {
               </dd>
             </div>
             <div>
+              <dt>Vendor</dt>
+              <dd>{d.vendor || "Not reported"}</dd>
+            </div>
+            <div>
               <dt>First seen</dt>
               <dd>
                 <When at={d.first_seen} />

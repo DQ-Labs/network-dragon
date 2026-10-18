@@ -79,7 +79,7 @@ export function Devices() {
   const matches = devices.filter(
     (d) =>
       !term ||
-      [label(d), d.hostname, d.ip, d.mac, d.notes].some((v) =>
+      [label(d), d.hostname, d.ip, d.mac, d.vendor, d.notes].some((v) =>
         String(v || "")
           .toLowerCase()
           .includes(term),
@@ -103,7 +103,7 @@ export function Devices() {
             ref={search}
             type="search"
             aria-label="Search devices"
-            placeholder="Search name, IP, MAC, or notes…"
+            placeholder="Search name, IP, MAC, vendor, or notes…"
             value={q}
             onChange={(e) => {
               setQ(e.target.value);

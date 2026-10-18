@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from conftest import xml
 from network_dragon.domain.policy import delivery_type_allowed
@@ -63,6 +65,38 @@ def test_dhcp_and_reused_address_preserve_identity(env, ingest_run):
 def test_missing_mac_is_provisional(env, ingest_run):
     ingest_run(xml([("192.0.2.1", None, [])]))
     assert device(env[0]).confidence == "provisional"
+
+
+def test_vendor_refreshed_only_by_reported_value(env, ingest_run):
+    ingest_run(xml([("192.0.2.1", "02:00:00:00:00:01", [], "Raspberry Pi Trading")]))
+    assert device(env[0]).vendor == "Raspberry Pi Trading"
+    ingest_run(xml(at=1120))
+    assert device(env[0]).vendor == "Raspberry Pi Trading"
+    ingest_run(xml([("192.0.2.1", "02:00:00:00:00:01", [], "Raspberry Pi (Trading) Ltd")], at=1240))
+    assert device(env[0]).vendor == "Raspberry Pi (Trading) Ltd"
+
+
+def test_vendor_migration_keeps_existing_devices(env, tmp_path):
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+    from network_dragon.persistence.db import engine_for, migrate
+
+    engine = engine_for(str(tmp_path / "old.db"))
+    config = AlembicConfig()
+    config.set_main_option("script_location", str(Path(__file__).parents[1] / "backend/migrations"))
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0002")
+        connection.exec_driver_sql(
+            "INSERT INTO networks VALUES ('n', 'n', '192.0.2.0/29', '', 'live', 1, 0, NULL, 'healthy', '', NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO devices (id, network_id, identity, confidence, ip, hostname, name, notes, acknowledged, watched, archived, monitored, presence, first_seen, last_seen, last_evidence, misses) VALUES ('d', 'n', 'ip:192.0.2.1', 'provisional', '192.0.2.1', '', '', '', 0, 0, 0, 1, 'online', 1, 1, 1, 0)"
+        )
+    migrate(engine)
+    with Session(engine) as s:
+        assert s.get(Device, "d").vendor is None
+    engine.dispose()
 
 
 def test_three_misses_and_duration_then_recovery(env, ingest_run):

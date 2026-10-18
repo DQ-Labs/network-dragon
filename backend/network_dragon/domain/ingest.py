@@ -249,6 +249,7 @@ def ingest(
                 network_id=network_id,
                 identity=identity,
                 mac=host.mac,
+                vendor=host.vendor or None,
                 confidence="mac" if host.mac else "provisional",
                 ip=host.ip,
                 hostname=host.hostname,
@@ -304,6 +305,9 @@ def ingest(
                     config,
                 )
                 device.hostname = host.hostname
+            # The OUI vendor is a label, not identity evidence; keep the last one reported.
+            if host.vendor:
+                device.vendor = host.vendor
             # Close conflicting and replaced bindings, without merging identities.
             for binding in session.scalars(
                 select(Address)

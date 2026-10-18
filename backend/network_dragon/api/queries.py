@@ -45,7 +45,13 @@ def device_query(q="", presence="", sort="ip"):
             or_(
                 *(
                     column.icontains(q[:120], autoescape=True)
-                    for column in (Device.name, Device.hostname, Device.ip, Device.mac)
+                    for column in (
+                        Device.name,
+                        Device.hostname,
+                        Device.ip,
+                        Device.mac,
+                        Device.vendor,
+                    )
                 )
             )
         )
