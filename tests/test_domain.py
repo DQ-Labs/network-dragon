@@ -199,6 +199,48 @@ def test_unambiguous_aggregate_updates_only_existing_ports(env, ingest_run):
         assert s.scalar(select(func.count()).select_from(CurrentPort)) == 1
 
 
+@pytest.mark.parametrize(
+    "first_coverage, aggregates, expected",
+    [
+        ("22,80,443", '<extraports count="2" state="closed"/>', "port.state"),
+        ("22,80", '<extraports count="1" state="closed"/>', "port.baseline"),
+        ("22,80,443", "", "port.baseline"),
+    ],
+    ids=["aggregate-proved-closed", "newly-covered", "no-prior-aggregate"],
+)
+def test_newly_open_port_compares_prior_aggregate(
+    env, ingest_run, first_coverage, aggregates, expected
+):
+    ingest_run(xml())
+    ingest_run(
+        xml(
+            [("192.0.2.1", None, [(22, "open", {})])],
+            coverage=first_coverage,
+            at=1100,
+            aggregates=aggregates,
+        ),
+        kind="ports",
+    )
+    ingest_run(
+        xml(
+            [("192.0.2.1", None, [(22, "open", {}), (443, "open", {})])],
+            coverage="22,80,443",
+            at=1200,
+            aggregates='<extraports count="1" state="closed"/>',
+        ),
+        kind="ports",
+    )
+    with Session(env[0]) as s:
+        events = list(s.scalars(select(Event).where(Event.type.like("port.%"), Event.at == 1200)))
+        assert [(e.type, e.facts["port"]) for e in events] == [(expected, 443)]
+        if expected == "port.state":
+            assert not events[0].baseline
+            assert events[0].facts["before"]["state"] == "closed"
+            assert events[0].facts["after"]["state"] == "open"
+        assert s.scalar(select(CurrentPort).where(CurrentPort.port == 443)).state == "open"
+        assert not list(s.scalars(select(Outbox).join(Event).where(Event.type.like("port.%"))))
+
+
 def test_enrichment_missing_evidence_and_service_change(env, ingest_run):
     ingest_run(xml())
     services = [
