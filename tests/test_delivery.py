@@ -1,7 +1,7 @@
 from conftest import xml
 from network_dragon.notifications.pushover import Delivery, FakePushover, Pushover
 from network_dragon.persistence.db import transaction
-from network_dragon.persistence.models import Device, Event, Network, Outbox
+from network_dragon.persistence.models import DeliveryAttempt, Device, Event, Network, Outbox
 from network_dragon.worker.dispatcher import dispatch_one
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -70,6 +70,22 @@ def test_invalid_credentials_stop_retry(env, ingest_run):
     dispatch_one(env[0], env[1], provider, 1361)
     dispatch_one(env[0], env[1], provider, 5000)
     assert len(provider.messages) == 1
+
+
+def test_unexpected_provider_error_retries_then_fails(env, ingest_run):
+    class Broken:
+        def send(self, message):
+            raise RuntimeError("unexpected provider bug with secret test-token")
+
+    outage(env, ingest_run)
+    for attempt in range(8):
+        assert dispatch_one(env[0], env[1], Broken(), 1361 + attempt * 4000)
+    with Session(env[0]) as s:
+        entry = s.scalar(select(Outbox).where(Outbox.status != "suppressed"))
+        assert (entry.status, entry.reason, entry.attempts) == ("failed", "provider_error", 8)
+        outcomes = {a.outcome for a in s.scalars(select(DeliveryAttempt))}
+        assert outcomes == {"provider_error"}
+    assert not dispatch_one(env[0], env[1], Broken(), 50000)
 
 
 def test_http_provider_sanitizes_response(monkeypatch):

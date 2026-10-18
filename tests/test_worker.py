@@ -143,3 +143,26 @@ def test_explicit_test_is_fixed_message_and_not_automatic(env):
     assert dispatch_test(env[0], env[1], provider, 1001)
     assert not dispatch_test(env[0], env[1], provider, 1002)
     assert len(provider.messages) == 1
+
+
+def test_test_notification_always_reaches_a_final_state(env):
+    class Broken:
+        def send(self, message):
+            raise RuntimeError("unexpected provider bug")
+
+    def status():
+        with Session(env[0]) as s:
+            return s.get(Setting, "notification_test").value["status"]
+
+    with transaction(env[0]) as s:
+        s.add(Setting(key="notification_test", value={"id": "t", "status": "queued", "at": 1000}))
+    assert dispatch_test(env[0], env[1], Broken(), 1001)
+    assert status() == "provider_error"
+    # A worker that died mid-send left "sending"; it is closed out, not resent.
+    with transaction(env[0]) as s:
+        s.get(Setting, "notification_test").value = {"id": "t", "status": "sending", "at": 1000}
+    provider = FakePushover()
+    assert not dispatch_test(env[0], env[1], provider, 1060)
+    assert status() == "sending"
+    assert dispatch_test(env[0], env[1], provider, 1200)
+    assert status() == "interrupted" and not provider.messages

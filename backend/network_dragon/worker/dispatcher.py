@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from network_dragon.domain.policy import delivery_type_allowed
+from network_dragon.notifications.pushover import Delivery
 from network_dragon.persistence.db import transaction
 from network_dragon.persistence.models import (
     DeliveryAttempt,
@@ -13,6 +14,15 @@ from network_dragon.persistence.models import (
     Outbox,
     Setting,
 )
+
+
+def send(provider, message):
+    try:
+        return provider.send(message)
+    except Exception:
+        # Any provider bug is still an outcome, so nothing stays "sending". The
+        # exception text is never stored: it may carry request secrets.
+        return Delivery("provider_error")
 
 
 def dispatch_one(engine, config, provider, now):
@@ -81,7 +91,7 @@ def dispatch_one(engine, config, provider, now):
         when = datetime.fromtimestamp(event.at, UTC).isoformat(timespec="seconds")
         message = f"{label} ({device.ip}): {event.type.removeprefix('presence.').replace('device.', '')}. Observed {when}."
     # Deliberately outside the database transaction; ambiguous acceptance is at-least-once.
-    result = provider.send(message)
+    result = send(provider, message)
     with transaction(engine) as session:
         entry = session.get(Outbox, entry_id)
         session.add(DeliveryAttempt(outbox_id=entry.id, at=now, outcome=result.outcome))
@@ -108,12 +118,18 @@ def dispatch_test(engine, config, provider, now):
 
     with transaction(engine) as session:
         setting = session.get(Setting, "notification_test")
-        if not setting or setting.value.get("status") != "queued":
+        status = setting.value.get("status") if setting else None
+        if status == "sending" and now - setting.value.get("at", 0) > 120:
+            # The worker stopped mid-send; close it out rather than resend.
+            setting.value = {**setting.value, "status": "interrupted"}
+            return True
+        if status != "queued":
             return False
         value = dict(setting.value)
         setting.value = {**value, "status": "sending", "at": now}
-    result = provider.send(
-        "Network Dragon test notification. Presence notifications are configured. Service changes remain history-only."
+    result = send(
+        provider,
+        "Network Dragon test notification. Presence notifications are configured. Service changes remain history-only.",
     )
     with transaction(engine) as session:
         setting = session.get(Setting, "notification_test")
