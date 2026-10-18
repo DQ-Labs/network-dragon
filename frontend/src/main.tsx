@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { api, setCsrf, write } from "./api/client";
 import { ErrorBox } from "./components/ui";
+import { interceptLinks, useRoute } from "./router";
 import "./styles/app.css";
 import { Overview } from "./pages/Overview";
 import { Devices } from "./pages/Devices";
@@ -42,9 +43,42 @@ function App() {
     "loading",
   );
   const [theme, setTheme] = useState(
-    localStorage.getItem("dragon-theme") || "dark",
+    localStorage.getItem("dragon-theme") ||
+      (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"),
   );
   const [mobile, setMobile] = useState(false);
+  const route = useRoute();
+  const [, setTick] = useState(0);
+  React.useEffect(() => {
+    // Re-render every 30s so relative times ("2m ago") stay current even
+    // when polling returns unchanged data.
+    const timer = setInterval(() => setTick((n) => n + 1), 30000);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMobile(false);
+    document.addEventListener("click", interceptLinks);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("click", interceptLinks);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+  const firstRoute = React.useRef(true);
+  React.useEffect(() => {
+    setMobile(false);
+    if (firstRoute.current) {
+      firstRoute.current = false;
+      return;
+    }
+    // Client-side navigation: start at the top and move focus to the new
+    // page heading so screen readers announce it.
+    scrollTo(0, 0);
+    const focus = (tries: number) => {
+      const heading = document.querySelector<HTMLElement>("#content h1");
+      if (heading) heading.focus({ preventScroll: true });
+      else if (tries) setTimeout(() => focus(tries - 1), 100);
+    };
+    requestAnimationFrame(() => focus(10));
+  }, [route]);
   React.useEffect(() => {
     api("/session")
       .then((data) => {
@@ -61,7 +95,8 @@ function App() {
     return <div className="startup">Connecting to Network Dragon…</div>;
   if (session === "signedout")
     return <Login onLogin={() => setSession("signedin")} />;
-  const path = location.pathname.split("/")[1] || "overview";
+  const segments = route.split("?")[0].split("/");
+  const path = segments[1] || "overview";
   const links = [
     ["overview", "Overview", LayoutDashboard],
     ["devices", "Devices", Server],
@@ -71,8 +106,12 @@ function App() {
     ["settings", "Settings", Settings2],
   ] as const;
   const title = links.find((l) => l[0] === path)?.[1] || "Overview";
+  document.title = `${title} · Network Dragon`;
   return (
     <div className="shell">
+      <a className="skip-link" href="#content">
+        Skip to content
+      </a>
       <aside className={mobile ? "sidebar shown" : "sidebar"}>
         <a href="/" className="brand">
           <span className="brand-mark">
@@ -100,8 +139,9 @@ function App() {
               href={key === "overview" ? "/" : `/${key}`}
               key={key}
               className={path === key ? "active" : ""}
+              aria-current={path === key ? "page" : undefined}
             >
-              <Icon size={18} />
+              <Icon size={18} aria-hidden="true" />
               <span>{text}</span>
               {path === key && <span className="nav-dot" />}
             </a>
@@ -122,6 +162,7 @@ function App() {
             <button
               className="icon-button"
               title="Sign out"
+              aria-label="Sign out"
               onClick={async () => {
                 await write("/session", "DELETE");
                 client.clear();
@@ -133,12 +174,20 @@ function App() {
           </div>
         </div>
       </aside>
+      {mobile && (
+        <div
+          className="scrim"
+          aria-hidden="true"
+          onClick={() => setMobile(false)}
+        />
+      )}
       <main>
         <header className="topbar">
           <div className="breadcrumbs">
             <button
               className="mobile-menu icon-button"
               aria-label="Toggle navigation"
+              aria-expanded={mobile}
               onClick={() => setMobile(!mobile)}
             >
               <Menu size={20} />
@@ -156,14 +205,18 @@ function App() {
               aria-label="Toggle color theme"
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             >
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+              {theme === "dark" ? (
+                <Sun size={18} aria-hidden="true" />
+              ) : (
+                <Moon size={18} aria-hidden="true" />
+              )}
             </button>
           </div>
         </header>
-        <div className="content">
+        <div className="content" id="content" key={route} tabIndex={-1}>
           {path === "devices" ? (
-            location.pathname.split("/")[2] ? (
-              <Detail id={location.pathname.split("/")[2]} />
+            segments[2] ? (
+              <Detail id={segments[2]} />
             ) : (
               <Devices />
             )

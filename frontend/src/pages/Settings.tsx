@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { write } from "../api/client";
 import {
@@ -8,9 +8,10 @@ import {
   Empty,
   ErrorBox,
   Badge,
-  time,
+  When,
   Row,
 } from "../components/ui";
+import { FinishBaseline } from "../components/Baseline";
 export function Settings() {
   const { data, error } = useData("/settings"),
     networks = useData("/networks"),
@@ -35,8 +36,8 @@ export function Settings() {
     <>
       <Heading
         eyebrow="INSTALLATION"
-        title="Deliberate defaults. Clear boundaries."
-        description="One administrator, one scanner, and explicit permission to reach your network."
+        title="Settings"
+        description="Deliberate defaults, clear boundaries: one administrator, one scanner, and explicit permission to reach your network."
       />
       <ErrorBox error={err} />
       <Panel
@@ -52,22 +53,20 @@ export function Settings() {
                 </h3>
                 <code>{n.cidr}</code>
                 <p>{n.health_reason}</p>
-                <small>Last discovery: {time(n.last_discovery)}</small>
+                <small>
+                  Last discovery: <When at={n.last_discovery} />
+                </small>
+                {n.baseline && (
+                  <p>
+                    Baseline review: notifications are held until you have
+                    acknowledged and watched your fixed devices and finish the
+                    review.
+                  </p>
+                )}
               </div>
               <div className="network-actions">
                 <Badge state={n.baseline ? "baseline_review" : "reviewed"} />
-                {n.baseline && (
-                  <button
-                    disabled={n.health !== "healthy"}
-                    onClick={() =>
-                      update(`/networks/${n.id}`, "PATCH", {
-                        activate_notifications: true,
-                      })
-                    }
-                  >
-                    Finish baseline review
-                  </button>
-                )}
+                {n.baseline && <FinishBaseline network={n} />}
                 <button
                   onClick={() =>
                     update(`/networks/${n.id}`, "PATCH", {
@@ -138,27 +137,34 @@ export function Settings() {
           subtitle="Edit installation defaults in the server TOML; restart web and worker."
         >
           <div className="policy-list">
-            {[
-              ["Discovery", `${data.discovery_seconds}s`],
-              ["Port scan cadence", `${data.ports_seconds}s`],
+            {(
               [
-                "Offline threshold",
-                `${data.offline_misses} misses + ${data.offline_seconds}s`,
-              ],
-              ["Detailed evidence", `${data.retention_observations_days} days`],
-              ["Change history", `${data.retention_events_days} days`],
-              ["Delivery attempts", `${data.retention_delivery_days} days`],
-              [
-                "Database",
-                `${(data.database_bytes / 1024 / 1024).toFixed(2)} MiB`,
-              ],
-              [
-                "Last backup",
-                data.last_backup
-                  ? time(data.last_backup.at)
-                  : "No backup recorded",
-              ],
-            ].map(([key, value]) => (
+                ["Discovery", `${data.discovery_seconds}s`],
+                ["Port scan cadence", `${data.ports_seconds}s`],
+                [
+                  "Offline threshold",
+                  `${data.offline_misses} misses + ${data.offline_seconds}s`,
+                ],
+                [
+                  "Detailed evidence",
+                  `${data.retention_observations_days} days`,
+                ],
+                ["Change history", `${data.retention_events_days} days`],
+                ["Delivery attempts", `${data.retention_delivery_days} days`],
+                [
+                  "Database",
+                  `${(data.database_bytes / 1024 / 1024).toFixed(2)} MiB`,
+                ],
+                [
+                  "Last backup",
+                  data.last_backup ? (
+                    <When at={data.last_backup.at} />
+                  ) : (
+                    "No backup recorded"
+                  ),
+                ],
+              ] as [string, ReactNode][]
+            ).map(([key, value]) => (
               <div key={key}>
                 {key}
                 <span>{value}</span>

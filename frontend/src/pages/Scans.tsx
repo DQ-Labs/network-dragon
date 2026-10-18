@@ -9,7 +9,7 @@ import {
   Empty,
   ErrorBox,
   Badge,
-  time,
+  When,
   Row,
   Pager,
   useOffset,
@@ -22,12 +22,16 @@ export function Scans() {
     settings = useData("/settings");
   const [err, setErr] = useState<Error | null>(null),
     query = useQueryClient();
+  const live = ((networks.data as unknown as Row[]) || []).filter(
+    (n) => n.mode === "live",
+  );
+  const canQueue = !!settings.data?.live_scanning && live.length > 0;
   return (
     <>
       <Heading
         eyebrow="SCANNER OPERATIONS"
-        title="Evidence you can inspect."
-        description="Discovery establishes presence. TCP scans capture services independently."
+        title="Scans"
+        description="Evidence you can inspect. Discovery establishes presence; TCP scans capture services independently."
       />
       <ErrorBox error={error || err} />
       <Panel
@@ -36,6 +40,7 @@ export function Scans() {
       >
         <form
           className="form inline-form"
+          aria-describedby={canQueue ? undefined : "queue-disabled"}
           onSubmit={async (e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
@@ -50,14 +55,16 @@ export function Scans() {
         >
           <label>
             Network
-            <select name="network_id" required>
-              {((networks.data as unknown as Row[]) || [])
-                .filter((n) => n.mode === "live")
-                .map((n) => (
+            <select name="network_id" required disabled={!live.length}>
+              {live.length ? (
+                live.map((n) => (
                   <option key={n.id} value={n.id}>
                     {n.name}
                   </option>
-                ))}
+                ))
+              ) : (
+                <option value="">No live networks</option>
+              )}
             </select>
           </label>
           <label>
@@ -78,15 +85,16 @@ export function Scans() {
               placeholder="Configured address or CIDR"
             />
           </label>
-          <button className="primary" disabled={!settings.data?.live_scanning}>
-            <Radar size={16} />
+          <button className="primary" disabled={!canQueue}>
+            <Radar size={16} aria-hidden="true" />
             Queue scan
           </button>
         </form>
-        {!settings.data?.live_scanning && (
-          <p className="panel-footnote">
-            Live scanning is disabled. Configure authorized scope and interface
-            in the installation TOML before enabling it.
+        {!canQueue && (
+          <p className="panel-footnote" id="queue-disabled">
+            {!settings.data?.live_scanning
+              ? "Live scanning is disabled. Configure authorized scope and interface in the installation TOML before enabling it."
+              : "Add a live network in Settings before queueing scans."}
           </p>
         )}
       </Panel>
@@ -116,7 +124,9 @@ export function Scans() {
                     <td>
                       <Badge state={j.status} />
                     </td>
-                    <td>{time(j.created_at)}</td>
+                    <td>
+                      <When at={j.created_at} />
+                    </td>
                     <td>
                       {["queued", "running"].includes(j.status) ? (
                         <button
@@ -149,7 +159,7 @@ export function Scans() {
             {data.runs.items.map((r: Row) => (
               <details key={r.id}>
                 <summary>
-                  <span className="run-icon">
+                  <span className="run-icon" aria-hidden="true">
                     <Radar size={18} />
                   </span>
                   <strong>
@@ -158,7 +168,7 @@ export function Scans() {
                   <span className="pill">{r.source}</span>
                   <code>{r.coverage.targets}</code>
                   <Badge state={r.status} />
-                  <time>{time(r.observed_at)}</time>
+                  <When at={r.observed_at} />
                 </summary>
                 <div className="run-detail">
                   <p>
