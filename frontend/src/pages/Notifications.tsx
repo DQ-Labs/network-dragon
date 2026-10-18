@@ -9,26 +9,32 @@ import {
   Empty,
   ErrorBox,
   Badge,
+  When,
   time,
   Pager,
   useOffset,
   Row,
+  label,
+  eventTitle,
+  useAllDevices,
 } from "../components/ui";
 export function Notifications() {
   const [actionError, setActionError] = useState<Error | null>(null);
   const [offset, setOffset] = useOffset(),
     { data, error } = useData(`/notifications?offset=${offset}`),
     settings = useData("/settings"),
+    devices = useAllDevices(),
     query = useQueryClient();
+  const names = new Map((devices.data || []).map((d) => [d.id, label(d)]));
   return (
     <>
       <Heading
         eyebrow="PRESENCE NOTIFICATIONS"
-        title="Attention, where it belongs."
-        description="New arrivals and watched-device outages. A quiet record of everything else."
+        title="Notifications"
+        description="Attention, where it belongs: new arrivals and watched-device outages. A quiet record of everything else."
       />
       <div className="policy-banner">
-        <ShieldCheck size={28} />
+        <ShieldCheck size={28} aria-hidden="true" />
         <div>
           <strong>Port and service changes never notify.</strong>
           <p>
@@ -137,13 +143,27 @@ export function Notifications() {
               <tbody>
                 {data.items.map((n: Row) => (
                   <tr key={n.id}>
-                    <td>{n.event.type}</td>
+                    <td>
+                      {n.event.device_id ? (
+                        <a
+                          className="text-link"
+                          href={`/devices/${n.event.device_id}`}
+                        >
+                          {names.get(n.event.device_id) ||
+                            n.event.facts?.ip ||
+                            "Device"}
+                        </a>
+                      ) : null}
+                      <small>{eventTitle(n.event)}</small>
+                    </td>
                     <td>
                       <Badge state={n.status} />
                     </td>
                     <td>{n.attempts}</td>
                     <td>{n.reason || "Accepted by provider"}</td>
-                    <td>{time(n.event.at)}</td>
+                    <td>
+                      <When at={n.event.at} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

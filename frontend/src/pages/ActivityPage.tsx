@@ -9,23 +9,39 @@ import {
   Pager,
   useOffset,
   param,
+  label,
+  useAllDevices,
 } from "../components/ui";
 export function ActivityPage() {
   const p = new URLSearchParams(location.search),
     [category, setCategory] = useState(p.get("category") || ""),
     [q, setQ] = useState(p.get("q") || ""),
-    [offset, setOffset] = useOffset();
+    [offset, setOffset] = useOffset(),
+    deviceId = p.get("device_id") || "",
+    devices = useAllDevices();
   const { data, error } = useData(
-    `/events?category=${category}&device_id=${p.get("device_id") || ""}&offset=${offset}&q=${encodeURIComponent(q)}`,
+    `/events?category=${category}&device_id=${deviceId}&offset=${offset}&q=${encodeURIComponent(q)}`,
   );
+  const device = devices.data?.find((d) => d.id === deviceId);
   return (
     <>
       <Heading
         eyebrow="CHANGE HISTORY"
-        title="The story behind the state."
-        description="Presence, identity, and service observations, with their evidence intact."
+        title="Activity"
+        description="The story behind the state: presence, identity, and service observations, with their evidence intact."
       />
-      <div className="tabs">
+      {deviceId && (
+        <div className="notice">
+          <span>
+            Showing history for{" "}
+            <a className="text-link" href={`/devices/${deviceId}`}>
+              {device ? label(device) : "one device"}
+            </a>
+          </span>
+          <a href="/activity">Show all devices</a>
+        </div>
+      )}
+      <div className="tabs" role="group" aria-label="Event category">
         {[
           ["", "All activity"],
           ["presence", "Presence"],
@@ -35,6 +51,7 @@ export function ActivityPage() {
         ].map(([value, text]) => (
           <button
             className={category === value ? "selected" : ""}
+            aria-pressed={category === value}
             key={value}
             onClick={() => {
               setCategory(value);
@@ -48,8 +65,9 @@ export function ActivityPage() {
       </div>
       <div className="toolbar">
         <label className="search">
-          <Search size={17} />
+          <Search size={17} aria-hidden="true" />
           <input
+            type="search"
             aria-label="Search event evidence"
             placeholder="Search port, service, version, address, or event…"
             value={q}
