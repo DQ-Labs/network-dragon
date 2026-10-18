@@ -83,8 +83,11 @@ def run_worker(engine, config, once=False):
                                 profile = session.get(Profile, job.profile_id)
                                 if profile.kind == "discovery":
                                     reset_misses(session, job.network_id)
-                                    network = session.get(Network, job.network_id)
-                                    network.health, network.health_reason = "unhealthy", job.error
+                                    # A deliberate cancel says nothing about the scanner's health.
+                                    if not job.cancel_requested:
+                                        network = session.get(Network, job.network_id)
+                                        network.health = "unhealthy"
+                                        network.health_reason = job.error
                     current, future = None, None
                 dispatch_one(engine, config, provider, now)
                 dispatch_test(engine, config, provider, now)

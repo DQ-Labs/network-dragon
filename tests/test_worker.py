@@ -7,6 +7,7 @@ from network_dragon.persistence.db import transaction
 from network_dragon.persistence.models import Device, Job, Network, Profile, Setting
 from network_dragon.scanner.process import arguments, interface_health
 from network_dragon.worker.dispatcher import dispatch_test
+from network_dragon.worker.main import run_worker
 from network_dragon.worker.queue import acquire, claim, enqueue, schedule
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -92,6 +93,35 @@ def test_excluded_address_is_never_scanned(env, ingest_run):
             enqueue(s, config, network, routine, "192.0.2.3", now=1001)
         schedule(s, config, 1001)
         assert {j.target for j in s.scalars(select(Job))} == {"192.0.2.0/29", "192.0.2.1"}
+
+
+@pytest.mark.parametrize(
+    "cancel, status, health",
+    [(True, "cancelled", "healthy"), (False, "failed", "unhealthy")],
+)
+def test_cancelled_discovery_keeps_health_but_resets_misses(
+    env, ingest_run, monkeypatch, cancel, status, health
+):
+    engine, config, network_id = env
+    ingest_run(xml())
+    with transaction(engine) as s:
+        s.scalar(select(Device)).misses = 2
+        s.add(
+            Job(key="manual", network_id=network_id, profile_id="discovery", target="192.0.2.0/29")
+        )
+
+    def execute(config, network, profile, target, cancelled):
+        # A user cancel (or disabling the network) sets cancel_requested mid-scan.
+        with transaction(engine) as s:
+            s.scalar(select(Job)).cancel_requested = cancel
+        raise ValueError("Scan cancelled or worker lease lost") if cancel else RuntimeError
+
+    monkeypatch.setattr("network_dragon.worker.main.execute", execute)
+    run_worker(engine, config, once=True)
+    with Session(engine) as s:
+        assert s.scalar(select(Job)).status == status
+        assert s.get(Network, network_id).health == health
+        assert s.scalar(select(Device)).misses == 0
 
 
 def test_missing_interface_fails_closed(monkeypatch):
