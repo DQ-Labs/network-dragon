@@ -84,7 +84,7 @@ jobs:
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,scope=arm64,mode=max
       - name: Same container checks under arm64 emulation
-        run: python3 scripts/container_check.py network-dragon:ci-arm64
+        run: python3 scripts/container_check.py network-dragon:ci-arm64 --emulated
 
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

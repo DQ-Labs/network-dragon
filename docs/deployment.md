@@ -24,6 +24,8 @@ Every pull request runs `scripts/container_check.py` against the image built fro
 - a sign-in carrying `tailscale serve`'s headers from 127.0.0.1 passes the same-origin check and gets a `Secure` cookie, while the same request without `X-Forwarded-Proto` gets 403;
 - a live network created through the API is picked up by the scheduled worker, and both targets appear as devices with the right MAC and IP.
 
+The `arm64` job runs with `--emulated`. QEMU user mode does not translate the SIOCETHTOOL ioctl behind psutil's `net_if_stats()`, so on arm64 the script skips only `interface_health`. It still builds the scan with `scanner.process.arguments()`, runs `route_health()`, and runs nmap from the capability-less Python worker. It also skips the scheduled-worker end-to-end check. On the Pi, psutil talks to the real kernel; step 6 confirms that.
+
 `tests/test_proxy_origin.py` covers the proxy behaviour again outside containers.
 
 These things have **not** been proven and must be checked on dragon:

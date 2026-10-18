@@ -1,6 +1,6 @@
 """Container acceptance for deploy/compose.yaml on a Linux Docker host (CI job "container").
 
-Usage: python3 scripts/container_check.py IMAGE
+Usage: python3 scripts/container_check.py IMAGE [--emulated]
 
 Runs the unmodified Compose file (only the image, config and secrets paths come from
 the environment) against a throwaway bridge network whose host-side interface plays
@@ -17,6 +17,11 @@ the part of dragon's eth0, then proves:
    mutation check; the same request without X-Forwarded-Proto is rejected.
 5. End to end: a live network created through the API is discovered by the
    scheduled worker, and the targets appear as devices with their MACs.
+
+--emulated (job "arm64", QEMU user mode on an x86 kernel): QEMU does not translate
+the SIOCETHTOOL ioctl that psutil's net_if_stats() issues, so step 1 calls
+scanner.process.arguments() and route_health() and runs nmap itself instead of
+execute(), and step 5 stops after creating the network.
 
 Standard library only; needs Docker with the Compose plugin and must run as a user
 that can create bridge networks. Leaves nothing behind.
@@ -41,17 +46,24 @@ PASSWORD = "container-check-password"
 NET_RAW = 1 << 13
 
 SCAN = """
-import json, os, re, sys, types
+import json, os, re, subprocess, sys, types
 from network_dragon.config import Config
-from network_dragon.scanner.process import execute
-cidr, iface = sys.argv[1:3]
+from network_dragon.scanner import process
+cidr, iface, emulated = sys.argv[1], sys.argv[2], sys.argv[3] == "emulated"
 status = open("/proc/self/status").read()
 caps = dict(re.findall(r"^(Cap\\w+|NoNewPrivs):\\s+(\\w+)$", status, re.M))
 print(json.dumps({"uid": os.getuid(), "status": caps}), flush=True)
 config = Config(live_scanning=True, allowed_cidrs=[cidr], allowed_interfaces=[iface])
 network = types.SimpleNamespace(mode="live", enabled=True, cidr=cidr, interface=iface)
 profile = types.SimpleNamespace(kind="discovery", budget=config.discovery_seconds)
-data, args = execute(config, network, profile, cidr)
+if emulated:
+    # QEMU user mode does not translate psutil's SIOCETHTOOL ioctl, so skip only
+    # interface_health; the arguments and route check are the worker's own.
+    args = process.arguments(config, network, profile, cidr)
+    process.route_health(network, cidr)
+    data = subprocess.run(args, capture_output=True, check=True, start_new_session=True).stdout
+else:
+    data, args = process.execute(config, network, profile, cidr)
 macs = re.findall(rb'addr="([0-9A-Fa-f:]{17})" addrtype="mac"', data)
 print(json.dumps({"args": args, "macs": [m.decode().lower() for m in macs]}))
 """
@@ -90,7 +102,8 @@ def call(method, path, headers=None, body=None):
         connection.close()
 
 
-def main(image):
+def main(image, emulated=False):
+    mode = "emulated" if emulated else "native"
     work = Path(tempfile.mkdtemp(prefix="ndci-"))
     secrets = work / "secrets"
     secrets.mkdir()
@@ -205,6 +218,7 @@ def main(image):
             SCAN,
             SUBNET,
             IFACE,
+            mode,
             check=False,
         )
         print(result.stdout, result.stderr, sep="\n")
@@ -258,6 +272,7 @@ def main(image):
                 SCAN,
                 SUBNET,
                 IFACE,
+                mode,
                 check=False,
             )
             tail = (result.stderr.strip().splitlines() or [""])[-1]
@@ -347,6 +362,10 @@ def main(image):
             json.dumps({"name": "CI bridge", "cidr": SUBNET, "interface": IFACE, "mode": "live"}),
         )
         check(status == 200, f"live network created: {body.decode()[:200]}")
+        if emulated:
+            print("skipped under emulation: the scheduled job runs interface_health (psutil)")
+            print("\nAll container checks passed (emulated).")
+            return
         deadline = time.monotonic() + 180
         while True:
             _, _, body = call("GET", "/api/v1/devices?limit=100", session)
@@ -385,4 +404,4 @@ def main(image):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], emulated="--emulated" in sys.argv[2:])
