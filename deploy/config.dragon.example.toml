@@ -1,0 +1,29 @@
+# dragon (Raspberry Pi 4) on VLAN 30 / AI-Zone. Install as
+# /etc/network-dragon/config.toml (root:10001, mode 0640); see docs/deployment.md.
+# Safe starting values: live scanning and delivery stay off until you flip them
+# by hand and restart both services.
+database = "/data/app.db"
+frontend = "/app/frontend/dist"
+backup_directory = "/data/backups"
+allow_http_local = false
+# `tailscale serve --https=8443 http://127.0.0.1:8000` connects from loopback and
+# sets X-Forwarded-Proto: https, so uvicorn treats the request as HTTPS.
+trusted_proxy_ips = ["127.0.0.1"]
+live_scanning = false
+notifications = false
+allowed_cidrs = ["192.168.30.0/24"]
+allowed_interfaces = ["eth0"]
+discovery_seconds = 120
+ports_seconds = 900
+routine_ports = "top1000"
+routine_budget_seconds = 60
+offline_misses = 3
+offline_seconds = 300
+cooldown_seconds = 600
+timezone = "America/New_York"
+retention_observations_days = 30
+retention_events_days = 365
+retention_delivery_days = 90
+# Pushover credentials are never TOML keys. Compose sets PUSHOVER_TOKEN_FILE and
+# PUSHOVER_USER_FILE to files under /etc/network-dragon/secrets (mounted
+# read-only at /run/secrets/network-dragon); leave them empty until delivery.

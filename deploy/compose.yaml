@@ -1,20 +1,28 @@
-# Linux VM candidate. Live ARP permissions MUST be validated before use.
+# Network Dragon on "dragon" (Raspberry Pi 4, arm64). See docs/deployment.md.
+# CI (.github/workflows/ci.yml, jobs "container" and "arm64") runs this file
+# unmodified via scripts/container_check.py; only the three ${NETWORK_DRAGON_*}
+# variables below differ.
 name: network-dragon
 x-common: &common
-  image: ${NETWORK_DRAGON_IMAGE:-network-dragon:0.1.0}
-  build:
-    context: ..
-    dockerfile: deploy/Dockerfile
+  image: ${NETWORK_DRAGON_IMAGE:-ghcr.io/dq-labs/network-dragon:latest}
   user: "10001:10001"
+  # Both services share the host network namespace. The web binds loopback
+  # only, so `tailscale serve` reaches it from 127.0.0.1 (the trusted proxy IP),
+  # which a published bridge port would hide behind the Docker gateway address.
+  network_mode: host
   read_only: true
   cap_drop: [ALL]
-  security_opt: [no-new-privileges:true]
-  tmpfs: [/tmp:size=32m,mode=1777]
+  tmpfs: ["/tmp:size=32m,mode=1777"]
   volumes:
     - dragon-data:/data
-    - ${NETWORK_DRAGON_CONFIG_FILE:?Set an absolute private TOML path}:/run/config.toml:ro
+    - ${NETWORK_DRAGON_CONFIG_FILE:-/etc/network-dragon/config.toml}:/run/config.toml:ro
+    - ${NETWORK_DRAGON_SECRETS_DIR:-/etc/network-dragon/secrets}:/run/secrets/network-dragon:ro
   environment:
     NETWORK_DRAGON_CONFIG: /run/config.toml
+    TZ: America/New_York
+    # Files must exist (empty means "not configured"); values never go here.
+    PUSHOVER_TOKEN_FILE: /run/secrets/network-dragon/pushover_token
+    PUSHOVER_USER_FILE: /run/secrets/network-dragon/pushover_user
   pids_limit: 100
   restart: unless-stopped
   logging:
@@ -25,19 +33,27 @@ x-common: &common
 services:
   web:
     <<: *common
-    command: [web, --host, 0.0.0.0]
-    ports: ["127.0.0.1:8000:8000"]
+    command: [web, --host, 127.0.0.1, --port, "8000"]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 20s
   worker:
     <<: *common
     command: [worker]
-    network_mode: host
-    # No capabilities granted by this unvalidated candidate. ARP fails closed
-    # until the documented minimum-permission trial passes.
-    profiles: [worker]
+    # Nmap carries the file capability cap_net_raw+ep; the bounding set must
+    # hold NET_RAW for it to take effect. no-new-privileges is deliberately
+    # absent: it would stop the file capability from applying when the Python
+    # worker execs nmap. The image has no setuid/setgid files. NET_ADMIN is
+    # not needed for `-sn -PR --send-eth`.
+    cap_add: [NET_RAW]
+    mem_limit: 256m
+    depends_on:
+      web:
+        condition: service_healthy
 volumes:
   dragon-data:
