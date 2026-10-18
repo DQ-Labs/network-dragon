@@ -1,11 +1,14 @@
 import json
+import sqlite3
 import time
+from types import SimpleNamespace
 
 import pytest
 from conftest import xml
 from fastapi.testclient import TestClient
 from network_dragon.api.app import create_app
 from network_dragon.auth.service import set_password
+from network_dragon.operations import backup as backups
 from network_dragon.operations.backup import backup, restore
 from network_dragon.operations.retention import cleanup
 from network_dragon.persistence.db import engine_for, transaction
@@ -61,6 +64,20 @@ def test_auth_csrf_and_password_invalidation(browser, env, ingest_run):
         == 200
     )
     assert browser.get("/api/v1/devices").status_code == 401
+
+
+def test_missing_secret_file_reads_as_unconfigured(browser, tmp_path, monkeypatch):
+    from network_dragon.config import secret
+
+    (tmp_path / "user").write_text("user-key\n")
+    monkeypatch.setenv("PUSHOVER_TOKEN_FILE", str(tmp_path / "absent"))
+    monkeypatch.setenv("PUSHOVER_USER_FILE", str(tmp_path / "user"))
+    assert (secret("PUSHOVER_TOKEN"), secret("PUSHOVER_USER")) == ("", "user-key")
+    headers = sign_in(browser)
+    response = browser.get("/api/v1/settings", headers=headers)
+    assert response.status_code == 200 and response.json()["credentials_configured"] is False
+    response = browser.post("/api/v1/notifications/test", headers=headers)
+    assert response.status_code == 422 and "absent" not in response.text
 
 
 def test_cross_origin_login_and_throttle(browser):
@@ -130,6 +147,44 @@ def test_backup_restore_paused_and_history_consistent(env, ingest_run, tmp_path)
         assert s.get(Setting, "delivery_paused").value["paused"]
         assert s.scalar(select(Device))
     engine.dispose()
+
+
+@pytest.mark.parametrize("corrupt", ["", "backup", "restore"])
+def test_backup_and_restore_close_connections_and_drop_bad_copies(
+    env, ingest_run, tmp_path, monkeypatch, corrupt
+):
+    opened, stage = [], {"now": "backup"}
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if corrupt == stage["now"] and "integrity_check" in sql:
+                return SimpleNamespace(fetchone=lambda: ("*** in database main ***",))
+            return super().execute(sql, *args)
+
+    def connect(*args, **kwargs):
+        opened.append(sqlite3.connect(*args, factory=Connection, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(backups, "sqlite3", SimpleNamespace(connect=connect))
+    ingest_run(xml())
+    restored = tmp_path / "restored.db"
+    if corrupt == "backup":
+        with pytest.raises(ValueError, match="integrity"):
+            backup(env[1])
+        assert not list((tmp_path / "backups").iterdir())
+    else:
+        destination = backup(env[1])
+        stage["now"] = "restore"
+        if corrupt:
+            with pytest.raises(ValueError, match="integrity"):
+                restore(destination, restored)
+        else:
+            restore(destination, restored)
+        assert restored.exists() == (not corrupt)
+    assert len(opened) >= 2
+    for connection in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 @pytest.mark.parametrize(
@@ -235,6 +290,45 @@ def test_device_list_batches_enrichment_and_preserves_pagination(browser, env, i
         event.remove(env[0], "before_cursor_execute", capture)
     detail = browser.get(f"/api/v1/devices/{first_id}").json()
     assert detail["open_ports"] == 1 and detail["stale"] is False
+
+
+def test_device_and_event_filters(browser, env, ingest_run):
+    hosts = [(f"192.0.2.{i}", f"02:00:00:00:00:0{i}", []) for i in range(1, 5)]
+    ingest_run(xml(hosts))
+    with transaction(env[0]) as s:
+        s.get(Network, env[2]).baseline = False
+        for device in s.scalars(select(Device)):
+            last = int(device.ip.rsplit(".", 1)[1])
+            device.acknowledged, device.watched, device.archived = last < 3, last == 2, last == 4
+    ingest_run(xml(hosts[:3] + [("192.0.2.5", "02:00:00:00:00:05", [])], at=1240))
+    headers = sign_in(browser)
+
+    def ips(**params):
+        data = browser.get("/api/v1/devices", params=params, headers=headers).json()
+        assert data["total"] == len(data["items"]) and set(data) == {
+            "items",
+            "total",
+            "offset",
+            "limit",
+        }
+        return [d["ip"] for d in data["items"]]
+
+    assert ips() == ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.5"]
+    assert ips(archived="true") == ["192.0.2.4"]
+    assert len(ips(archived="any")) == 5
+    assert ips(acknowledged="false") == ["192.0.2.3", "192.0.2.5"]
+    assert ips(acknowledged="false", archived="any") == ["192.0.2.3", "192.0.2.4", "192.0.2.5"]
+    assert ips(watched="true") == ["192.0.2.2"] and ips(watched="true", q="192.0.2.1") == []
+    assert browser.get("/api/v1/devices?archived=maybe", headers=headers).status_code == 422
+
+    def types(**params):
+        data = browser.get("/api/v1/events", params=params, headers=headers).json()
+        return [(e["type"], e["baseline"]) for e in data["items"]]
+
+    assert ("device.new", True) in types() and ("device.new", False) in types()
+    assert ("device.new", False) in types(baseline="false")
+    assert {baseline for _, baseline in types(baseline="false")} == {False}
+    assert {baseline for _, baseline in types(baseline="true")} == {True}
 
 
 def test_retention_preserves_event_evidence(env, ingest_run):

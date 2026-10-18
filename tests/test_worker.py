@@ -7,6 +7,7 @@ from network_dragon.persistence.db import transaction
 from network_dragon.persistence.models import Device, Job, Network, Profile, Setting
 from network_dragon.scanner.process import arguments, interface_health
 from network_dragon.worker.dispatcher import dispatch_test
+from network_dragon.worker.main import run_worker
 from network_dragon.worker.queue import acquire, claim, enqueue, schedule
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -94,6 +95,35 @@ def test_excluded_address_is_never_scanned(env, ingest_run):
         assert {j.target for j in s.scalars(select(Job))} == {"192.0.2.0/29", "192.0.2.1"}
 
 
+@pytest.mark.parametrize(
+    "cancel, status, health",
+    [(True, "cancelled", "healthy"), (False, "failed", "unhealthy")],
+)
+def test_cancelled_discovery_keeps_health_but_resets_misses(
+    env, ingest_run, monkeypatch, cancel, status, health
+):
+    engine, config, network_id = env
+    ingest_run(xml())
+    with transaction(engine) as s:
+        s.scalar(select(Device)).misses = 2
+        s.add(
+            Job(key="manual", network_id=network_id, profile_id="discovery", target="192.0.2.0/29")
+        )
+
+    def execute(config, network, profile, target, cancelled):
+        # A user cancel (or disabling the network) sets cancel_requested mid-scan.
+        with transaction(engine) as s:
+            s.scalar(select(Job)).cancel_requested = cancel
+        raise ValueError("Scan cancelled or worker lease lost") if cancel else RuntimeError
+
+    monkeypatch.setattr("network_dragon.worker.main.execute", execute)
+    run_worker(engine, config, once=True)
+    with Session(engine) as s:
+        assert s.scalar(select(Job)).status == status
+        assert s.get(Network, network_id).health == health
+        assert s.scalar(select(Device)).misses == 0
+
+
 def test_missing_interface_fails_closed(monkeypatch):
     monkeypatch.setattr("psutil.net_if_stats", lambda: {})
     with pytest.raises(ValueError, match="missing or down"):
@@ -113,3 +143,26 @@ def test_explicit_test_is_fixed_message_and_not_automatic(env):
     assert dispatch_test(env[0], env[1], provider, 1001)
     assert not dispatch_test(env[0], env[1], provider, 1002)
     assert len(provider.messages) == 1
+
+
+def test_test_notification_always_reaches_a_final_state(env):
+    class Broken:
+        def send(self, message):
+            raise RuntimeError("unexpected provider bug")
+
+    def status():
+        with Session(env[0]) as s:
+            return s.get(Setting, "notification_test").value["status"]
+
+    with transaction(env[0]) as s:
+        s.add(Setting(key="notification_test", value={"id": "t", "status": "queued", "at": 1000}))
+    assert dispatch_test(env[0], env[1], Broken(), 1001)
+    assert status() == "provider_error"
+    # A worker that died mid-send left "sending"; it is closed out, not resent.
+    with transaction(env[0]) as s:
+        s.get(Setting, "notification_test").value = {"id": "t", "status": "sending", "at": 1000}
+    provider = FakePushover()
+    assert not dispatch_test(env[0], env[1], provider, 1060)
+    assert status() == "sending"
+    assert dispatch_test(env[0], env[1], provider, 1200)
+    assert status() == "interrupted" and not provider.messages

@@ -68,6 +68,8 @@ The MCP tools (`list_devices`, `get_device`, `recent_events`, `network_status`, 
 curl -H "Authorization: Bearer <token>" "https://dragon.lonk-dorian.ts.net:8443/api/v1/devices?presence=online&limit=20"
 ```
 
+`/api/v1/devices` also filters on `acknowledged`, `watched` and `archived` (`true`/`false`). Archived devices are left out unless you pass `archived=true` (only archived) or `archived=any`. `/api/v1/events` takes `baseline=false` to drop baseline observations.
+
 The OpenAPI schema is at `/api/v1/openapi.json` and needs a session or token; `/docs` and `/redoc` stay disabled. `/mcp` refuses requests without a valid bearer token (401) and any browser `Origin` other than the app's own (403). Agents that send no `Origin` are accepted. With `allow_http_local = true`, `/mcp` is limited to localhost like the rest of the app.
 
 ## Operating model

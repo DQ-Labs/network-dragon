@@ -75,4 +75,7 @@ def load_config() -> Config:
 
 def secret(name: str) -> str:
     path = os.environ.get(f"{name}_FILE")
-    return Path(path).read_text().strip() if path else os.environ.get(name, "").strip()
+    if not path:
+        return os.environ.get(name, "").strip()
+    # A missing secret file reads as unconfigured, never as an error that could echo its path.
+    return Path(path).read_text().strip() if Path(path).is_file() else ""

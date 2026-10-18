@@ -57,7 +57,8 @@ export function Devices() {
         : "ip") as SortKey,
       dir: params.get("dir") === "desc" ? "desc" : "asc",
     });
-  const { data, error, isPending } = useAllDevices();
+  const { data, error, isPending } = useAllDevices(),
+    archived = useAllDevices(true);
   const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // "/" jumps to the search box from anywhere on the page.
@@ -74,12 +75,12 @@ export function Devices() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  const devices = data || [];
+  const devices = [...(data || []), ...(archived.data || [])];
   const term = q.trim().toLowerCase();
   const matches = devices.filter(
     (d) =>
       !term ||
-      [label(d), d.hostname, d.ip, d.mac, d.notes].some((v) =>
+      [label(d), d.hostname, d.ip, d.mac, d.vendor, d.notes].some((v) =>
         String(v || "")
           .toLowerCase()
           .includes(term),
@@ -103,7 +104,7 @@ export function Devices() {
             ref={search}
             type="search"
             aria-label="Search devices"
-            placeholder="Search name, IP, MAC, or notes…"
+            placeholder="Search name, IP, MAC, vendor, or notes…"
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
@@ -138,7 +139,7 @@ export function Devices() {
           );
         })}
       </div>
-      <ErrorBox error={error} />
+      <ErrorBox error={error || archived.error} />
       <Panel
         title={views.find(([key]) => key === view)![1] + " devices"}
         subtitle={

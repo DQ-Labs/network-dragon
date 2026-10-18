@@ -14,18 +14,16 @@ import {
   Pager,
   useOffset,
   Row,
-  label,
   eventTitle,
-  useAllDevices,
+  useDeviceNames,
 } from "../components/ui";
 export function Notifications() {
   const [actionError, setActionError] = useState<Error | null>(null);
   const [offset, setOffset] = useOffset(),
     { data, error } = useData(`/notifications?offset=${offset}`),
     settings = useData("/settings"),
-    devices = useAllDevices(),
+    names = useDeviceNames(),
     query = useQueryClient();
-  const names = new Map((devices.data || []).map((d) => [d.id, label(d)]));
   return (
     <>
       <Heading

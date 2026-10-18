@@ -180,6 +180,9 @@ export function DeviceTable({
                       <small>
                         <span className="narrow-only">{d.ip} · </span>
                         {d.mac || "No MAC · provisional identity"}
+                        {d.vendor && (
+                          <span className="wide-only"> · {d.vendor}</span>
+                        )}
                       </small>
                     </span>
                   </a>

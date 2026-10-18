@@ -287,11 +287,18 @@ def create_app(config: Config | None = None, engine=None):
         q: str = "",
         presence: str = "",
         sort: Literal["name", "last_seen", "ip"] = "ip",
+        acknowledged: bool | None = None,
+        watched: bool | None = None,
+        # Archived devices are hidden from the inventory unless asked for.
+        archived: bool | Literal["any"] = False,
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=100),
         session=Depends(db),
     ):
-        data = page(session, device_query(q, presence, sort), offset, limit)
+        stmt = device_query(
+            q, presence, sort, acknowledged, watched, None if archived == "any" else archived
+        )
+        data = page(session, stmt, offset, limit)
         data["items"] = enrich_devices(session, config, data["items"])
         return data
 
@@ -372,11 +379,12 @@ def create_app(config: Config | None = None, engine=None):
         category: str = "",
         device_id: str = "",
         q: str = "",
+        baseline: bool | None = None,
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=100),
         session=Depends(db),
     ):
-        return page(session, event_query(category, device_id, q), offset, limit)
+        return page(session, event_query(category, device_id, q, baseline=baseline), offset, limit)
 
     @app.get("/api/v1/scans", dependencies=protected)
     def scans(

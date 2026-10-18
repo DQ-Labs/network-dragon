@@ -38,14 +38,28 @@ def page(session, stmt, offset, limit):
     }
 
 
-def device_query(q="", presence="", sort="ip"):
+def device_query(q="", presence="", sort="ip", acknowledged=None, watched=None, archived=None):
     stmt = select(Device).where(Device.canonical_id.is_(None))
+    # None means either value.
+    for column, value in [
+        (Device.acknowledged, acknowledged),
+        (Device.watched, watched),
+        (Device.archived, archived),
+    ]:
+        if value is not None:
+            stmt = stmt.where(column.is_(value))
     if q:
         stmt = stmt.where(
             or_(
                 *(
                     column.icontains(q[:120], autoescape=True)
-                    for column in (Device.name, Device.hostname, Device.ip, Device.mac)
+                    for column in (
+                        Device.name,
+                        Device.hostname,
+                        Device.ip,
+                        Device.mac,
+                        Device.vendor,
+                    )
                 )
             )
         )
@@ -103,8 +117,10 @@ def device_detail(session, config, device):
     return result
 
 
-def event_query(category="", device_id="", q="", since=None):
+def event_query(category="", device_id="", q="", since=None, baseline=None):
     stmt = select(Event)
+    if baseline is not None:
+        stmt = stmt.where(Event.baseline.is_(baseline))
     if device_id:
         stmt = stmt.where(Event.device_id == device_id)
     if category in CATEGORIES:

@@ -35,6 +35,7 @@ class Device(Base):
     network_id: Mapped[str] = mapped_column(ForeignKey("networks.id"), index=True)
     identity: Mapped[str]
     mac: Mapped[str | None]
+    vendor: Mapped[str | None]
     confidence: Mapped[str] = mapped_column(default="provisional")
     ip: Mapped[str]
     hostname: Mapped[str] = mapped_column(default="")

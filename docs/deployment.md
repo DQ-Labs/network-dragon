@@ -39,14 +39,13 @@ ARP as UID 10001 on arm64 is checked in step 6 on dragon itself.
 
 `tests/test_proxy_origin.py` covers the proxy behaviour again outside containers.
 
-These things have **not** been proven and must be checked on dragon:
+Checked on dragon itself (October 18, 2026):
 
-- That Docker 26.1.5 on the Pi keeps nmap's file capability when it pulls the image (step 2 checks this).
-- That memory limits are enforced. Raspberry Pi kernels often ship with the memory cgroup off (step 1).
-- ARP on arm64 at all, and on the real `eth0` and VLAN 30 through the physical switch rather than a Linux bridge. ARP was proven natively on amd64 only.
-- The real `tailscale serve` on dragon, and running alongside Bluehood for memory and ports.
-- The Debian `docker-compose` package version and its Compose features (step 1).
-- Firewall, IPv6 policy, and Pushover delivery (see the end of this page).
+- ARP discovery on arm64 as UID 10001, on the real `eth0` and VLAN 30 through the physical switch. This also shows Docker on the Pi kept nmap's file capability when it pulled the image.
+- Sign-in through the real `tailscale serve`, alongside Bluehood's ports, and the MCP endpoint over the tailnet.
+- Memory limits are **not** enforced there: the Pi kernel runs with `cgroup_disable=memory`, so `mem_limit` is accepted and ignored (step 1). Memory use alongside Bluehood is unmeasured.
+
+Still open: firewall, IPv6 policy, and Pushover delivery (see the end of this page).
 
 ## 1. Install the Compose plugin and check the host
 
@@ -65,7 +64,7 @@ docker info 2>&1 | grep -i -E 'cgroup|memory limit'   # any "No memory limit sup
 sudo ss -tlnp | grep -E ':(8000|8443)\b'              # must print nothing
 ```
 
-If Docker warns about memory limits, add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt`, reboot, and check again.
+If Docker warns about memory limits, the containers still run but their `mem_limit` is ignored; that is the case on dragon, whose kernel runs with `cgroup_disable=memory`. To try enabling it, add `cgroup_enable=memory` to the single line in `/boot/firmware/cmdline.txt`, reboot, and check again.
 
 ## 2. Pull the image
 
@@ -99,7 +98,7 @@ sudo chmod 0640 /etc/network-dragon/config.toml /etc/network-dragon/secrets/*
 sudo chmod 0750 /etc/network-dragon/secrets
 ```
 
-The secret files must exist even while empty: the app reads `PUSHOVER_TOKEN_FILE`/`PUSHOVER_USER_FILE` on the Settings page, and a missing file gives an error there. An empty file means "not configured". The template starts with `live_scanning = false` and `notifications = false`, with the VLAN 30 allowlist, `eth0`, and `trusted_proxy_ips = ["127.0.0.1"]` already filled in.
+The app reads `PUSHOVER_TOKEN_FILE`/`PUSHOVER_USER_FILE` when needed; an empty or missing file means "not configured", and the Settings page says so. The template starts with `live_scanning = false` and `notifications = false`, with the VLAN 30 allowlist, `eth0`, and `trusted_proxy_ips = ["127.0.0.1"]` already filled in.
 
 ```sh
 cd /opt/network-dragon

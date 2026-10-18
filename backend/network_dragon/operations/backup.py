@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 
 from sqlalchemy import delete
@@ -12,14 +13,25 @@ from network_dragon.persistence.db import engine_for, transaction
 from network_dragon.persistence.models import AuthSession, Outbox, Setting
 
 
+def copy(source, destination, failure, pages=-1):
+    """Copy and verify a database, closing both connections; a failed copy is removed."""
+    # sqlite3's own context manager only ends the transaction; it never closes.
+    try:
+        with closing(source), closing(sqlite3.connect(destination)) as target:
+            source.backup(target, pages=pages)
+            if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise ValueError(failure)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+
+
 def backup(config):
     directory = Path(config.backup_directory)
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / f"dragon-{time.time_ns()}.db"
-    with sqlite3.connect(config.database) as source, sqlite3.connect(destination) as target:
-        source.backup(target, pages=256)
-        if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise ValueError("Backup integrity check failed")
+    copy(sqlite3.connect(config.database), destination, "Backup integrity check failed", 256)
+    with closing(sqlite3.connect(destination)) as target:
         schema = target.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     manifest = {
         "application": __version__,
@@ -75,13 +87,11 @@ def restore(source: Path, destination: Path):
     if actual_checksum != checksum.lower():
         raise ValueError("Backup checksum mismatch")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with (
-        sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True) as src,
-        sqlite3.connect(destination) as dst,
-    ):
-        src.backup(dst)
-        if dst.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise ValueError("Restored database integrity check failed")
+    copy(
+        sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro", uri=True),
+        destination,
+        "Restored database integrity check failed",
+    )
     engine = engine_for(str(destination))
     with transaction(engine) as session:
         setting = session.get(Setting, "delivery_paused")

@@ -35,6 +35,7 @@ class Host:
     complete: bool
     ports: list[Port] = field(default_factory=list)
     aggregate_state: str | None = None
+    vendor: str = ""
 
 
 @dataclass
@@ -77,6 +78,7 @@ def parse_xml(data: bytes) -> Scan:
             name.get("name", "")[:255] if name is not None else "",
             status is not None and status.get("state") == "up",
             complete and element.get("timedout", "false") != "true",
+            vendor=mac_el.get("vendor", "").strip()[:120] if mac_el is not None else "",
         )
         for entry in element.findall("ports/port"):
             if entry.get("protocol") != "tcp":

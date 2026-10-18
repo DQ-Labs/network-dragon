@@ -82,14 +82,17 @@ export function useData(path: string) {
 }
 
 // One VLAN holds at most 256 addresses, so the whole inventory is small
-// enough to load once and filter, sort, and count in the browser.
-export function useAllDevices() {
+// enough to load once and filter, sort, and count in the browser. The
+// server leaves archived devices out; they are loaded only where shown.
+export function useAllDevices(archived = false) {
   return useQuery<Row[]>({
-    queryKey: ["/devices", "all"],
+    queryKey: ["/devices", archived ? "archived" : "active"],
     queryFn: async () => {
       const items: Row[] = [];
       for (let offset = 0; offset < 2000;) {
-        const page = await api(`/devices?sort=ip&limit=100&offset=${offset}`);
+        const page = await api(
+          `/devices?sort=ip&limit=100&offset=${offset}${archived ? "&archived=true" : ""}`,
+        );
         items.push(...page.items);
         offset += page.limit;
         if (!page.items.length || offset >= page.total) break;
@@ -97,6 +100,18 @@ export function useAllDevices() {
       return items;
     },
   });
+}
+
+// Event and delivery history still names devices that were archived since.
+export function useDeviceNames() {
+  const active = useAllDevices(),
+    archived = useAllDevices(true);
+  return new Map(
+    [...(active.data || []), ...(archived.data || [])].map((d) => [
+      d.id,
+      label(d),
+    ]),
+  );
 }
 
 export const isMuted = (d: Row) => !!d.mute_until && d.mute_until > now();
@@ -185,9 +200,8 @@ export function Events({
   showDevice?: boolean;
   empty?: ReactNode;
 }) {
-  const devices = useAllDevices();
+  const names = useDeviceNames();
   if (!items.length) return <Empty>{empty}</Empty>;
-  const names = new Map((devices.data || []).map((d) => [d.id, label(d)]));
   return (
     <ul className="events">
       {items.map((e) => {
