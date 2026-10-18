@@ -17,6 +17,8 @@ class Config(BaseModel):
     allowed_interfaces: list[str] = Field(default_factory=list)
     # Addresses never scanned or recorded, e.g. a honeypot that alerts on any probe.
     excluded_addresses: list[str] = Field(default_factory=list)
+    # MACs expected to answer for several addresses (e.g. a router); others are conflicts.
+    multihomed_macs: list[str] = Field(default_factory=list)
     nmap: str = "nmap"
     max_targets: int = Field(default=256, ge=1, le=256)
     discovery_seconds: int = Field(default=120, ge=30, le=86400)
@@ -54,6 +56,16 @@ class Config(BaseModel):
         from ipaddress import IPv4Address
 
         return sorted({str(IPv4Address(item)) for item in value}, key=IPv4Address)
+
+    @field_validator("multihomed_macs")
+    @classmethod
+    def validate_macs(cls, value):
+        import re
+
+        macs = {item.upper().replace("-", ":") for item in value}
+        if any(not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", mac) for mac in macs):
+            raise ValueError("multihomed_macs entries must be MAC addresses")
+        return sorted(macs)
 
 
 def load_config() -> Config:

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from conftest import xml
+from network_dragon.config import Config
 from network_dragon.domain.ingest import ingest
 from network_dragon.notifications.pushover import Pushover
 from network_dragon.persistence.db import transaction
@@ -14,17 +15,30 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 
-def test_one_address_with_two_macs_is_withheld(env, ingest_run):
-    hosts = [("192.0.2.1", "02:00:00:00:00:01", []), ("192.0.2.1", "02:00:00:00:00:02", [])]
+@pytest.mark.parametrize("same_mac", [True, False])
+def test_conflicting_identities_are_withheld(env, ingest_run, same_mac):
+    # An unlisted MAC on two addresses may be spoofed, so it stays a conflict.
+    hosts = [
+        ("192.0.2.1", "02:00:00:00:00:01", []),
+        (
+            "192.0.2.2" if same_mac else "192.0.2.1",
+            "02:00:00:00:00:01" if same_mac else "02:00:00:00:00:02",
+            [],
+        ),
+    ]
     run_id = ingest_run(xml(hosts))
     with Session(env[0]) as s:
         assert s.get(Run, run_id).status == "partial"
         assert not list(s.scalars(select(Device)))
-        assert s.get(Run, run_id).coverage["identity_conflicts"] == ["192.0.2.1"]
+        assert s.get(Run, run_id).coverage["identity_conflicts"]
+        assert ("multihomed_macs" in s.get(Run, run_id).health_reason) is same_mac
 
 
-def test_one_mac_answering_for_several_addresses_is_one_device(env, ingest_run):
+def test_listed_multihomed_mac_is_one_device(env, ingest_run):
     gateway = "9E:05:D6:BB:B5:47"
+    # Config normalizes case and separators; direct assignment below skips validation.
+    assert Config(multihomed_macs=["9e-05-d6-bb-b5-47"]).multihomed_macs == [gateway]
+    env[1].multihomed_macs = [gateway]
     both = [("192.0.2.3", gateway, []), ("192.0.2.1", gateway, [])]
     first = ingest_run(xml(both))
     ingest_run(xml(both, at=1120))
@@ -37,6 +51,9 @@ def test_one_mac_answering_for_several_addresses_is_one_device(env, ingest_run):
         bindings = {a.address: a.ended_at for a in s.scalars(select(Address))}
         assert bindings == {"192.0.2.1": None, "192.0.2.3": 1240}
         assert not list(s.scalars(select(Event).where(Event.type == "identity.address")))
+        (added,) = s.scalars(select(Event).where(Event.type == "identity.address_added"))
+        assert added.facts == {"address": "192.0.2.3", "primary": "192.0.2.1", "mac": gateway}
+        assert not list(s.scalars(select(Outbox).where(Outbox.event_id == added.id)))
 
 
 def test_excluded_address_is_never_recorded(env, ingest_run):

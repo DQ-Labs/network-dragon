@@ -117,18 +117,24 @@ def ingest(
     skipped = excluded(config, target_scope)
     scan.hosts = [host for host in scan.hosts if host.ip not in skipped]
     trustworthy = healthy and scan.complete
-    # Several MACs for one address is ambiguous. One MAC answering for several
-    # addresses is a single multi-homed device, bound to each address below.
+    # Several MACs for one address is always ambiguous. One MAC on several addresses
+    # is also a conflict (it may be a spoofed MAC) unless the operator listed it in
+    # multihomed_macs; then it is one device bound to each address below.
     ip_counts = Counter(host.ip for host in scan.hosts if host.up)
-    conflicts = {host.ip for host in scan.hosts if ip_counts[host.ip] > 1}
+    mac_counts = Counter(host.mac for host in scan.hosts if host.up and host.mac)
+    shared = {mac for mac, count in mac_counts.items() if count > 1}
+    unexpected = shared - set(config.multihomed_macs)
+    conflicts = {host.ip for host in scan.hosts if ip_counts[host.ip] > 1 or host.mac in unexpected}
     if conflicts:
         trustworthy = False
         health_reason = (
-            "Several MACs answered for one address; ambiguous identities withheld for review"
-        )
+            "One MAC answered for several addresses; list it in multihomed_macs if expected. "
+            if unexpected
+            else ""
+        ) + "Conflicting IP/MAC evidence; ambiguous identities withheld for review"
     mac_addresses: dict[str, list[str]] = {}
     for host in scan.hosts:
-        if host.up and host.complete and host.mac and host.ip not in conflicts:
+        if host.up and host.complete and host.mac in shared and host.ip not in conflicts:
             mac_addresses.setdefault(host.mac, []).append(host.ip)
     full = target_scope.num_addresses
     if kind == "discovery" and scan.total not in {full, full - len(skipped)}:
@@ -318,9 +324,22 @@ def ingest(
                 )
                 if binding:
                     binding.last_seen = at
-                else:
-                    session.add(
-                        Address(device_id=device.id, address=address, first_seen=at, last_seen=at)
+                    continue
+                session.add(
+                    Address(device_id=device.id, address=address, first_seen=at, last_seen=at)
+                )
+                if address != host.ip:
+                    # History-only, like other identity events: a listed MAC gained an address.
+                    emit(
+                        session,
+                        network,
+                        device,
+                        run,
+                        "identity.address_added",
+                        at,
+                        {"address": address, "primary": host.ip, "mac": host.mac},
+                        config,
+                        address,
                     )
             device.ip, device.last_seen, device.last_evidence = host.ip, at, at
             device.monitored = network.enabled and not device.archived
