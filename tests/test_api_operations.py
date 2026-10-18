@@ -292,6 +292,45 @@ def test_device_list_batches_enrichment_and_preserves_pagination(browser, env, i
     assert detail["open_ports"] == 1 and detail["stale"] is False
 
 
+def test_device_and_event_filters(browser, env, ingest_run):
+    hosts = [(f"192.0.2.{i}", f"02:00:00:00:00:0{i}", []) for i in range(1, 5)]
+    ingest_run(xml(hosts))
+    with transaction(env[0]) as s:
+        s.get(Network, env[2]).baseline = False
+        for device in s.scalars(select(Device)):
+            last = int(device.ip.rsplit(".", 1)[1])
+            device.acknowledged, device.watched, device.archived = last < 3, last == 2, last == 4
+    ingest_run(xml(hosts[:3] + [("192.0.2.5", "02:00:00:00:00:05", [])], at=1240))
+    headers = sign_in(browser)
+
+    def ips(**params):
+        data = browser.get("/api/v1/devices", params=params, headers=headers).json()
+        assert data["total"] == len(data["items"]) and set(data) == {
+            "items",
+            "total",
+            "offset",
+            "limit",
+        }
+        return [d["ip"] for d in data["items"]]
+
+    assert ips() == ["192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.5"]
+    assert ips(archived="true") == ["192.0.2.4"]
+    assert len(ips(archived="any")) == 5
+    assert ips(acknowledged="false") == ["192.0.2.3", "192.0.2.5"]
+    assert ips(acknowledged="false", archived="any") == ["192.0.2.3", "192.0.2.4", "192.0.2.5"]
+    assert ips(watched="true") == ["192.0.2.2"] and ips(watched="true", q="192.0.2.1") == []
+    assert browser.get("/api/v1/devices?archived=maybe", headers=headers).status_code == 422
+
+    def types(**params):
+        data = browser.get("/api/v1/events", params=params, headers=headers).json()
+        return [(e["type"], e["baseline"]) for e in data["items"]]
+
+    assert ("device.new", True) in types() and ("device.new", False) in types()
+    assert ("device.new", False) in types(baseline="false")
+    assert {baseline for _, baseline in types(baseline="false")} == {False}
+    assert {baseline for _, baseline in types(baseline="true")} == {True}
+
+
 def test_retention_preserves_event_evidence(env, ingest_run):
     ingest_run(xml())
     cleanup(env[0], env[1], 1000 + 31 * 86400)

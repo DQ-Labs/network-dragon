@@ -27,6 +27,12 @@ test('authenticated fixture inventory, quiet history, and administration', async
   await page.getByRole('button', { name: 'Save details' }).click();
   await expect(page.getByRole('heading', { name: 'compute-01.lab' })).toBeVisible();
   await page.goto('/activity?category=ports');
+  // Baseline observations stay out of the history unless asked for.
+  await expect(page.getByText('Port state changed · 3000/tcp', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^Port recorded in baseline/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Show baseline' }).click();
+  await expect(page.getByText('Port recorded in baseline · 22/tcp', { exact: true }).first()).toBeVisible();
+  await expect(page).toHaveURL(/baseline=1/);
   await page.getByRole('searchbox', { name: 'Search event evidence' }).fill('8080');
   await expect(page.getByText('Port state changed · 8080/tcp', { exact: true })).toBeVisible();
   await expect(page.getByText('Port state changed · 3000/tcp', { exact: true })).not.toBeVisible();
@@ -85,8 +91,10 @@ test('device inventory loads every API page and sorts IP addresses numerically',
   const device = (ip: string) => ({ id: ip, network_id: 'n', ip, mac: null, name: '', hostname: `host-${ip.split('.')[3]}`, presence: 'online', monitored: true, acknowledged: true, watched: false, archived: false, stale: false, open_ports: 0, last_seen: Date.now() / 1000, first_seen: 0 });
   const all = ['192.0.2.100', '192.0.2.9', '192.0.2.10'].map(device);
   await page.route('**/api/v1/devices?**', async route => {
-    const offset = Number(new URL(route.request().url()).searchParams.get('offset') || 0);
-    await route.fulfill({ json: { items: all.slice(offset, offset + 2), total: all.length, offset, limit: 2 } });
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get('offset') || 0);
+    const items = url.searchParams.get('archived') === 'true' ? [] : all;
+    await route.fulfill({ json: { items: items.slice(offset, offset + 2), total: items.length, offset, limit: 2 } });
   });
   await page.goto('/devices');
   await expect(page.getByText('Showing 3 of 3 active devices')).toBeVisible();
@@ -112,6 +120,9 @@ test('overview answers the morning questions and guides baseline review', async 
   const stamp = scanner.locator('time').first();
   await expect(stamp).toHaveAttribute('datetime', /^\d{4}-\d\d-\d\dT/);
   expect(await stamp.getAttribute('title')).toMatch(/\d/);
+  // Every presence event is still a baseline observation, so none is shown as a change.
+  const presence = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Presence changes' }) });
+  await expect(presence.getByText('No arrivals or outages since the baseline was recorded.')).toBeVisible();
   // Port changes name the device they happened on.
   const ports = page.locator('section.panel').filter({ has: page.getByRole('heading', { name: 'Port & service changes' }) });
   await expect(ports.getByText('Port state changed · 3000/tcp')).toBeVisible();

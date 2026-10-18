@@ -121,7 +121,9 @@ function scannerState(data: Row, networks: Row[], lastPorts?: number) {
 export function Overview() {
   const { data, error, isPending } = useData("/overview");
   const inventory = useAllDevices(),
-    scans = useData("/scans?limit=20");
+    scans = useData("/scans?limit=20"),
+    // Asked of the server: filtering six recent events here can leave none.
+    presence = useData("/events?category=presence&baseline=false&limit=6");
   if (isPending) return <Empty>Loading network overview…</Empty>;
   if (!data) return <ErrorBox error={error} />;
   const counts = data.counts,
@@ -143,7 +145,7 @@ export function Overview() {
         Number(b.watched) - Number(a.watched) ||
         (b.first_seen || 0) - (a.first_seen || 0),
     );
-  const changes = (data.presence as Row[]).filter((e) => !e.baseline);
+  const changes: Row[] = presence.data?.items || [];
   const single = networks.length === 1 ? networks[0] : null;
   return (
     <>

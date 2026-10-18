@@ -57,7 +57,8 @@ export function Devices() {
         : "ip") as SortKey,
       dir: params.get("dir") === "desc" ? "desc" : "asc",
     });
-  const { data, error, isPending } = useAllDevices();
+  const { data, error, isPending } = useAllDevices(),
+    archived = useAllDevices(true);
   const search = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // "/" jumps to the search box from anywhere on the page.
@@ -74,7 +75,7 @@ export function Devices() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  const devices = data || [];
+  const devices = [...(data || []), ...(archived.data || [])];
   const term = q.trim().toLowerCase();
   const matches = devices.filter(
     (d) =>
@@ -138,7 +139,7 @@ export function Devices() {
           );
         })}
       </div>
-      <ErrorBox error={error} />
+      <ErrorBox error={error || archived.error} />
       <Panel
         title={views.find(([key]) => key === view)![1] + " devices"}
         subtitle={

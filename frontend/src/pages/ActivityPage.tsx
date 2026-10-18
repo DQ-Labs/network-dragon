@@ -9,20 +9,20 @@ import {
   Pager,
   useOffset,
   param,
-  label,
-  useAllDevices,
+  useDeviceNames,
 } from "../components/ui";
 export function ActivityPage() {
   const p = new URLSearchParams(location.search),
     [category, setCategory] = useState(p.get("category") || ""),
     [q, setQ] = useState(p.get("q") || ""),
+    // Baseline observations record what was already there; hidden unless asked for.
+    [baseline, setBaseline] = useState(p.get("baseline") === "1"),
     [offset, setOffset] = useOffset(),
     deviceId = p.get("device_id") || "",
-    devices = useAllDevices();
+    names = useDeviceNames();
   const { data, error } = useData(
-    `/events?category=${category}&device_id=${deviceId}&offset=${offset}&q=${encodeURIComponent(q)}`,
+    `/events?category=${category}&device_id=${deviceId}&offset=${offset}&q=${encodeURIComponent(q)}${baseline ? "" : "&baseline=false"}`,
   );
-  const device = devices.data?.find((d) => d.id === deviceId);
   return (
     <>
       <Heading
@@ -35,7 +35,7 @@ export function ActivityPage() {
           <span>
             Showing history for{" "}
             <a className="text-link" href={`/devices/${deviceId}`}>
-              {device ? label(device) : "one device"}
+              {names.get(deviceId) || "one device"}
             </a>
           </span>
           <a href="/activity">Show all devices</a>
@@ -78,6 +78,18 @@ export function ActivityPage() {
             }}
           />
         </label>
+        <button
+          className="chip"
+          aria-pressed={baseline}
+          title="Baseline observations record what was already present when monitoring started."
+          onClick={() => {
+            setBaseline(!baseline);
+            param("baseline", baseline ? "" : "1");
+            setOffset(0);
+          }}
+        >
+          Show baseline
+        </button>
       </div>
       <ErrorBox error={error} />
       <Panel
@@ -86,7 +98,11 @@ export function ActivityPage() {
             ? "Quiet port & service history"
             : "Recorded events"
         }
-        subtitle="Baseline observations are marked. Port changes never generate notifications."
+        subtitle={
+          baseline
+            ? "Baseline observations are marked. Port changes never generate notifications."
+            : "Baseline observations are hidden. Port changes never generate notifications."
+        }
       >
         <Events items={data?.items || []} />
         <Pager
