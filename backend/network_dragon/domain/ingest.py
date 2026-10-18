@@ -19,6 +19,7 @@ from network_dragon.persistence.models import (
     Setting,
     uid,
 )
+from network_dragon.scanner.validation import excluded
 from network_dragon.scanner.xml import Port, parse_xml
 
 
@@ -112,18 +113,31 @@ def ingest(
         raise ValueError("Result contains an out-of-scope address")
     if kind not in {"discovery", "ports"}:
         raise ValueError("Unknown scan kind")
+    # Excluded addresses (e.g. a honeypot) are never recorded, whoever produced the XML.
+    skipped = excluded(config, target_scope)
+    scan.hosts = [host for host in scan.hosts if host.ip not in skipped]
     trustworthy = healthy and scan.complete
+    # Several MACs for one address is always ambiguous. One MAC on several addresses
+    # is also a conflict (it may be a spoofed MAC) unless the operator listed it in
+    # multihomed_macs; then it is one device bound to each address below.
     ip_counts = Counter(host.ip for host in scan.hosts if host.up)
     mac_counts = Counter(host.mac for host in scan.hosts if host.up and host.mac)
-    conflicts = {
-        host.ip
-        for host in scan.hosts
-        if ip_counts[host.ip] > 1 or (host.mac and mac_counts[host.mac] > 1)
-    }
+    shared = {mac for mac, count in mac_counts.items() if count > 1}
+    unexpected = shared - set(config.multihomed_macs)
+    conflicts = {host.ip for host in scan.hosts if ip_counts[host.ip] > 1 or host.mac in unexpected}
     if conflicts:
         trustworthy = False
-        health_reason = "Conflicting IP/MAC evidence; ambiguous identities withheld for review"
-    if kind == "discovery" and scan.total != target_scope.num_addresses:
+        health_reason = (
+            "One MAC answered for several addresses; list it in multihomed_macs if expected. "
+            if unexpected
+            else ""
+        ) + "Conflicting IP/MAC evidence; ambiguous identities withheld for review"
+    mac_addresses: dict[str, list[str]] = {}
+    for host in scan.hosts:
+        if host.up and host.complete and host.mac in shared and host.ip not in conflicts:
+            mac_addresses.setdefault(host.mac, []).append(host.ip)
+    full = target_scope.num_addresses
+    if kind == "discovery" and scan.total not in {full, full - len(skipped)}:
         trustworthy = False
         health_reason = "Discovery did not cover the complete requested scope"
     run = Run(
@@ -160,6 +174,7 @@ def ingest(
         and d.monitored
         and not d.archived
         and ipaddress.ip_address(d.ip) in target_scope
+        and d.ip not in skipped
     ]
     missing = [d for d in prior if d.ip not in seen_ips]
     if kind == "discovery" and len(prior) >= 3 and len(missing) / len(prior) >= 0.8:
@@ -200,6 +215,17 @@ def ingest(
         device = session.scalar(
             select(Device).where(Device.network_id == network_id, Device.identity == identity)
         )
+        group = mac_addresses.get(host.mac, []) if kind == "discovery" and host.mac else []
+        if len(group) > 1:
+            # Keep the current primary address so a multi-homed device never flaps.
+            primary = (
+                device.ip
+                if device and device.ip in group
+                else min(group, key=ipaddress.IPv4Address)
+            )
+            if host.ip != primary:
+                continue
+        bound = set(group) if len(group) > 1 else {host.ip}
         if kind == "ports":
             # -Pn and service responses are never discovery/identity evidence.
             candidates = list(
@@ -284,23 +310,37 @@ def ingest(
                 .join(Device, Address.device_id == Device.id)
                 .where(Device.network_id == network_id, Address.ended_at.is_(None))
             ):
-                if (binding.device_id == device.id and binding.address != host.ip) or (
-                    binding.address == host.ip and binding.device_id != device.id
+                if (binding.device_id == device.id and binding.address not in bound) or (
+                    binding.address in bound and binding.device_id != device.id
                 ):
                     binding.ended_at = at
-            binding = session.scalar(
-                select(Address).where(
-                    Address.device_id == device.id,
-                    Address.address == host.ip,
-                    Address.ended_at.is_(None),
+            for address in sorted(bound, key=ipaddress.IPv4Address):
+                binding = session.scalar(
+                    select(Address).where(
+                        Address.device_id == device.id,
+                        Address.address == address,
+                        Address.ended_at.is_(None),
+                    )
                 )
-            )
-            if binding:
-                binding.last_seen = at
-            else:
+                if binding:
+                    binding.last_seen = at
+                    continue
                 session.add(
-                    Address(device_id=device.id, address=host.ip, first_seen=at, last_seen=at)
+                    Address(device_id=device.id, address=address, first_seen=at, last_seen=at)
                 )
+                if address != host.ip:
+                    # History-only, like other identity events: a listed MAC gained an address.
+                    emit(
+                        session,
+                        network,
+                        device,
+                        run,
+                        "identity.address_added",
+                        at,
+                        {"address": address, "primary": host.ip, "mac": host.mac},
+                        config,
+                        address,
+                    )
             device.ip, device.last_seen, device.last_evidence = host.ip, at, at
             device.monitored = network.enabled and not device.archived
             device.presence, device.misses = "online", 0
@@ -344,7 +384,12 @@ def ingest(
                 run_id=run.id,
                 device_id=device.id,
                 observed_at=at,
-                facts={"ip": host.ip, "mac": host.mac, "up": host.up, "kind": kind},
+                facts={"ip": host.ip, "mac": host.mac, "up": host.up, "kind": kind}
+                | (
+                    {"addresses": sorted(bound, key=ipaddress.IPv4Address)}
+                    if len(bound) > 1
+                    else {}
+                ),
             )
         )
         if kind == "ports" and trustworthy:
@@ -357,6 +402,7 @@ def ingest(
                 or device.archived
                 or device.canonical_id
                 or ipaddress.ip_address(device.ip) not in target_scope
+                or device.ip in skipped
             ):
                 continue
             if at <= device.last_evidence:

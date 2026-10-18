@@ -124,7 +124,10 @@ def schedule(session, config, now):
                 Device.canonical_id.is_(None),
             )
         ):
-            if now - device.last_seen <= config.discovery_seconds * 3:
+            if (
+                now - device.last_seen <= config.discovery_seconds * 3
+                and device.ip not in config.excluded_addresses
+            ):
                 enqueue(
                     session,
                     config,
