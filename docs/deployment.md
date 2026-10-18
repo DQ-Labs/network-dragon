@@ -99,7 +99,7 @@ sudo chmod 0640 /etc/network-dragon/config.toml /etc/network-dragon/secrets/*
 sudo chmod 0750 /etc/network-dragon/secrets
 ```
 
-The secret files must exist even while empty: the app reads `PUSHOVER_TOKEN_FILE`/`PUSHOVER_USER_FILE` on the Settings page, and a missing file gives an error there. An empty file means "not configured". The template starts with `live_scanning = false` and `notifications = false`, with the VLAN 30 allowlist, `eth0`, and `trusted_proxy_ips = ["127.0.0.1"]` already filled in.
+The app reads `PUSHOVER_TOKEN_FILE`/`PUSHOVER_USER_FILE` when needed; an empty or missing file means "not configured", and the Settings page says so. The template starts with `live_scanning = false` and `notifications = false`, with the VLAN 30 allowlist, `eth0`, and `trusted_proxy_ips = ["127.0.0.1"]` already filled in.
 
 ```sh
 cd /opt/network-dragon

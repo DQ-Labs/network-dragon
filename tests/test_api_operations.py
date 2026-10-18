@@ -66,6 +66,20 @@ def test_auth_csrf_and_password_invalidation(browser, env, ingest_run):
     assert browser.get("/api/v1/devices").status_code == 401
 
 
+def test_missing_secret_file_reads_as_unconfigured(browser, tmp_path, monkeypatch):
+    from network_dragon.config import secret
+
+    (tmp_path / "user").write_text("user-key\n")
+    monkeypatch.setenv("PUSHOVER_TOKEN_FILE", str(tmp_path / "absent"))
+    monkeypatch.setenv("PUSHOVER_USER_FILE", str(tmp_path / "user"))
+    assert (secret("PUSHOVER_TOKEN"), secret("PUSHOVER_USER")) == ("", "user-key")
+    headers = sign_in(browser)
+    response = browser.get("/api/v1/settings", headers=headers)
+    assert response.status_code == 200 and response.json()["credentials_configured"] is False
+    response = browser.post("/api/v1/notifications/test", headers=headers)
+    assert response.status_code == 422 and "absent" not in response.text
+
+
 def test_cross_origin_login_and_throttle(browser):
     assert (
         browser.post(
