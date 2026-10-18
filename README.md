@@ -45,6 +45,31 @@ Pop-Location
 
 Run `uv run python scripts/check_browser.py` for browser verification. It generates a unique test password, prepares a separate fixture database, starts the app on localhost port 8765, runs Playwright, and stops its server. Screenshots are saved under `artifacts/`; it never changes a real inventory or enables external actions. For manual browser-test setup, `scripts/make_demo.py --browser` accepts `DRAGON_TEST_PASSWORD` and writes `.tmp/browser.toml`.
 
+## Agent access
+
+Local AI agents can read the inventory through a remote MCP endpoint at `/mcp` (streamable HTTP, stateless JSON) and the JSON API, using **read-only API tokens**. Tokens work only for `GET`/`HEAD` on `/api/v1/*` and for `/mcp`; any other method gets 403, and they never work on `/api/v1/session*` (sign-in, sign-out, password change). The database stores only each token's SHA-256 digest. Creating and revoking tokens is audited.
+
+```bash
+network-dragon init                                    # applies migration 0002 when upgrading
+network-dragon create-token laptop-agent --expires-days 90   # prints the token once
+network-dragon list-tokens                             # name, created, last used (to the minute), expiry
+network-dragon revoke-token laptop-agent
+```
+
+Connect Claude Code:
+
+```bash
+claude mcp add --transport http network-dragon https://dragon.lonk-dorian.ts.net:8443/mcp --header "Authorization: Bearer <token>"
+```
+
+The MCP tools (`list_devices`, `get_device`, `recent_events`, `network_status`, `scan_history`) return compact JSON with UTC ISO-8601 times and paginate with `offset`/`limit`. A device can be named by id or current IP. Query the API with curl:
+
+```bash
+curl -H "Authorization: Bearer <token>" "https://dragon.lonk-dorian.ts.net:8443/api/v1/devices?presence=online&limit=20"
+```
+
+The OpenAPI schema is at `/api/v1/openapi.json` and needs a session or token; `/docs` and `/redoc` stay disabled. `/mcp` refuses requests without a valid bearer token (401) and any browser `Origin` other than the app's own (403). Agents that send no `Origin` are accepted. With `allow_http_local = true`, `/mcp` is limited to localhost like the rest of the app.
+
 ## Operating model
 
 - One administrator and one leased worker. The web process only queues jobs.

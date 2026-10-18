@@ -1,15 +1,18 @@
 import argparse
 import getpass
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from network_dragon.auth.service import set_password
+from network_dragon.auth.service import create_token, revoke_token, set_password
 from network_dragon.config import load_config
 from network_dragon.domain.ingest import ingest
 from network_dragon.persistence.db import engine_for, migrate, transaction
-from network_dragon.persistence.models import Network, Profile
+from network_dragon.persistence.models import ApiToken, Network, Profile
 from network_dragon.scanner.validation import scope
 from network_dragon.worker.queue import enqueue, seed_profiles
 
@@ -19,6 +22,12 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="Apply migrations and seed fixed profiles; no scans")
     sub.add_parser("create-admin", help="Set the local administrator password interactively")
+    token = sub.add_parser("create-token", help="Create a read-only API/MCP token; shown once")
+    token.add_argument("name")
+    token.add_argument("--expires-days", type=int)
+    sub.add_parser("list-tokens")
+    revoke = sub.add_parser("revoke-token")
+    revoke.add_argument("name")
     web = sub.add_parser("web")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8000)
@@ -54,6 +63,31 @@ def main():
             with transaction(engine) as session:
                 set_password(session, password)
             print("Administrator configured. Existing sessions invalidated.")
+        elif args.command == "create-token":
+            with transaction(engine) as session:
+                raw = create_token(session, args.name, args.expires_days)
+            print(f"Token {args.name!r} (read-only; shown once, store it now):\n{raw}")
+        elif args.command == "list-tokens":
+
+            def when(value, empty="-"):
+                return (
+                    datetime.fromtimestamp(value, UTC).strftime("%Y-%m-%d %H:%M")
+                    if value
+                    else empty
+                )
+
+            print(f"{'NAME':<24} {'CREATED (UTC)':<17} {'LAST USED':<17} EXPIRES")
+            with Session(engine) as session:
+                for t in session.scalars(select(ApiToken).order_by(ApiToken.name)):
+                    expired = t.expires_at is not None and t.expires_at <= time.time()
+                    print(
+                        f"{t.name:<24} {when(t.created_at):<17} {when(t.last_used_at):<17} "
+                        f"{when(t.expires_at, 'never')}{' (expired)' if expired else ''}"
+                    )
+        elif args.command == "revoke-token":
+            with transaction(engine) as session:
+                revoke_token(session, args.name)
+            print(f"Token {args.name!r} revoked.")
         elif args.command == "import-fixture":
             scope(args.cidr)
             with transaction(engine) as session:
@@ -110,8 +144,6 @@ def main():
                 "Restored with delivery paused, stale messages suppressed, and sessions invalidated."
             )
         elif args.command == "retention":
-            import time
-
             from network_dragon.operations.retention import cleanup
 
             print(cleanup(engine, config, time.time(), budget_seconds=None))

@@ -1,4 +1,5 @@
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -6,14 +7,33 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Text, func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from network_dragon.auth.service import COOKIE, authenticate, login, set_password, verify
+from network_dragon.api.agent import agent_server
+from network_dragon.api.queries import (
+    delivery_paused,
+    device_counts,
+    device_detail,
+    device_query,
+    enrich_devices,
+    event_query,
+    jobs_query,
+    page,
+    record,
+    runs_query,
+)
+from network_dragon.auth.service import (
+    COOKIE,
+    authenticate,
+    login,
+    set_password,
+    token_refusal,
+    verify,
+)
 from network_dragon.config import Config, load_config, secret
 from network_dragon.persistence.db import engine_for, transaction
 from network_dragon.persistence.models import (
-    Address,
     Audit,
     CurrentPort,
     DeliveryAttempt,
@@ -91,31 +111,30 @@ class DeliveryPause(Input):
     paused: bool
 
 
-def record(row):
-    return {column.name: getattr(row, column.name) for column in row.__table__.columns}
-
-
-def page(session, stmt, offset, limit):
-    total = session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
-    return {
-        "items": [record(row) for row in session.scalars(stmt.offset(offset).limit(limit))],
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-    }
-
-
 def create_app(config: Config | None = None, engine=None):
     config = config or load_config()
     engine = engine or engine_for(config.database)
+    agent, agent_app = agent_server(engine, config)
+
+    @asynccontextmanager
+    async def lifespan(_):
+        async with agent.session_manager.run():
+            yield
+
     app = FastAPI(
-        title="Network Dragon", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None
+        title="Network Dragon",
+        version="0.1.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
     )
     app.state.engine, app.state.config = engine, config
 
     @app.middleware("http")
     async def security(request, call_next):
-        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        # /mcp is POST-only JSON-RPC; any browser Origin other than ours is refused on every method.
+        if request.method not in {"GET", "HEAD", "OPTIONS"} or request.url.path == "/mcp":
             origin = request.headers.get("origin")
             expected = urlsplit(str(request.base_url))
             if origin and (urlsplit(origin).scheme, urlsplit(origin).netloc) != (
@@ -125,6 +144,8 @@ def create_app(config: Config | None = None, engine=None):
                 return JSONResponse({"detail": "Cross-origin mutation rejected"}, status_code=403)
             if request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse({"detail": "Cross-site mutation rejected"}, status_code=403)
+        if refusal := token_refusal(request):
+            return JSONResponse({"detail": refusal}, status_code=403)
         if config.allow_http_local and request.url.hostname not in {
             "localhost",
             "127.0.0.1",
@@ -141,7 +162,7 @@ def create_app(config: Config | None = None, engine=None):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         )
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") or request.url.path == "/mcp":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -164,34 +185,11 @@ def create_app(config: Config | None = None, engine=None):
             raise HTTPException(404, "Record not found")
         return value
 
-    def enrich_devices(session, items):
-        if not items:
-            return items
-        health = dict(
-            session.execute(
-                select(Network.id, Network.health).where(
-                    Network.id.in_({item["network_id"] for item in items})
-                )
-            ).all()
-        )
-        open_ports = dict(
-            session.execute(
-                select(CurrentPort.device_id, func.count())
-                .where(
-                    CurrentPort.device_id.in_([item["id"] for item in items]),
-                    CurrentPort.state == "open",
-                )
-                .group_by(CurrentPort.device_id)
-            ).all()
-        )
-        now = time.time()
-        for item in items:
-            item["stale"] = (
-                now - item["last_evidence"] > config.discovery_seconds * 3
-                or health.get(item["network_id"]) != "healthy"
-            )
-            item["open_ports"] = open_ports.get(item["id"], 0)
-        return items
+    app.add_route("/mcp", agent_app, include_in_schema=False)
+
+    @app.get("/api/v1/openapi.json", dependencies=protected, include_in_schema=False)
+    def openapi_schema():
+        return app.openapi()
 
     @app.get("/health/live")
     def live():
@@ -250,23 +248,8 @@ def create_app(config: Config | None = None, engine=None):
 
     @app.get("/api/v1/overview", dependencies=protected)
     def overview(session=Depends(db)):
-        devices = list(
-            session.scalars(
-                select(Device).where(Device.archived.is_(False), Device.canonical_id.is_(None))
-            )
-        )
-        counts = {
-            state: sum(d.presence == state and d.monitored for d in devices)
-            for state in ["online", "offline", "suspected_missing", "unknown"]
-        }
-        counts.update(
-            total=len(devices),
-            awaiting_review=sum(not d.acknowledged for d in devices),
-            watched=sum(d.watched for d in devices),
-            unmonitored=sum(not d.monitored for d in devices),
-        )
         return {
-            "counts": counts,
+            "counts": device_counts(session),
             "networks": [record(n) for n in session.scalars(select(Network))],
             "worker": record(session.get(WorkerLease, 1)) if session.get(WorkerLease, 1) else None,
             "presence": page(
@@ -308,40 +291,13 @@ def create_app(config: Config | None = None, engine=None):
         limit: int = Query(50, ge=1, le=100),
         session=Depends(db),
     ):
-        stmt = select(Device).where(Device.canonical_id.is_(None))
-        if q:
-            term = f"%{q[:120]}%"
-            stmt = stmt.where(
-                or_(
-                    Device.name.ilike(term),
-                    Device.hostname.ilike(term),
-                    Device.ip.ilike(term),
-                    Device.mac.ilike(term),
-                )
-            )
-        if presence:
-            stmt = stmt.where(Device.presence == presence)
-        stmt = stmt.order_by(
-            {"name": Device.name, "ip": Device.ip, "last_seen": Device.last_seen.desc()}[sort],
-            Device.id,
-        )
-        data = page(session, stmt, offset, limit)
-        data["items"] = enrich_devices(session, data["items"])
+        data = page(session, device_query(q, presence, sort), offset, limit)
+        data["items"] = enrich_devices(session, config, data["items"])
         return data
 
     @app.get("/api/v1/devices/{id_}", dependencies=protected)
     def device(id_: str, session=Depends(db)):
-        result = enrich_devices(session, [record(get(session, Device, id_))])[0]
-        result["addresses"] = [
-            record(a)
-            for a in session.scalars(
-                select(Address).where(Address.device_id == id_).order_by(Address.first_seen.desc())
-            )
-        ]
-        result["aliases"] = [
-            record(d) for d in session.scalars(select(Device).where(Device.canonical_id == id_))
-        ]
-        return result
+        return device_detail(session, config, get(session, Device, id_))
 
     @app.patch("/api/v1/devices/{id_}", dependencies=protected)
     def edit_device(id_: str, payload: DevicePatch):
@@ -420,30 +376,15 @@ def create_app(config: Config | None = None, engine=None):
         limit: int = Query(50, ge=1, le=100),
         session=Depends(db),
     ):
-        stmt = select(Event)
-        if device_id:
-            stmt = stmt.where(Event.device_id == device_id)
-        categories = {
-            "presence": ["presence.%", "device.%"],
-            "ports": ["port.%", "service.%"],
-            "identity": ["identity.%"],
-            "system": ["scanner.%"],
-        }
-        if category in categories:
-            stmt = stmt.where(or_(*(Event.type.like(pattern) for pattern in categories[category])))
-        if q:
-            stmt = stmt.where(
-                or_(Event.type.contains(q[:120]), Event.facts.cast(Text).contains(q[:120]))
-            )
-        return page(session, stmt.order_by(Event.at.desc(), Event.id), offset, limit)
+        return page(session, event_query(category, device_id, q), offset, limit)
 
     @app.get("/api/v1/scans", dependencies=protected)
     def scans(
         offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), session=Depends(db)
     ):
         return {
-            "jobs": page(session, select(Job).order_by(Job.created_at.desc()), offset, limit),
-            "runs": page(session, select(Run).order_by(Run.observed_at.desc()), offset, limit),
+            "jobs": page(session, jobs_query(), offset, limit),
+            "runs": page(session, runs_query(), offset, limit),
         }
 
     @app.get("/api/v1/scans/{id_}", dependencies=protected)
@@ -548,14 +489,25 @@ def create_app(config: Config | None = None, engine=None):
         offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100), session=Depends(db)
     ):
         result = page(session, select(Outbox).order_by(Outbox.next_attempt.desc()), offset, limit)
-        for item in result["items"]:
-            item["event"] = record(session.get(Event, item["event_id"]))
-            item["delivery_attempts"] = [
-                record(a)
-                for a in session.scalars(
-                    select(DeliveryAttempt).where(DeliveryAttempt.outbox_id == item["id"])
-                )
-            ]
+        items = result["items"]
+        events = {
+            e.id: record(e)
+            for e in session.scalars(
+                select(Event).where(Event.id.in_([i["event_id"] for i in items]))
+            )
+        }
+        attempts: dict[str, list] = {i["id"]: [] for i in items}
+        for attempt in session.scalars(
+            select(DeliveryAttempt)
+            .where(DeliveryAttempt.outbox_id.in_(attempts))
+            .order_by(DeliveryAttempt.at, DeliveryAttempt.id)
+        ):
+            attempts[attempt.outbox_id].append(record(attempt))
+        for item in items:
+            item["event"], item["delivery_attempts"] = (
+                events[item["event_id"]],
+                attempts[item["id"]],
+            )
         return result
 
     @app.post("/api/v1/notifications/pause", dependencies=protected)
@@ -603,13 +555,12 @@ def create_app(config: Config | None = None, engine=None):
 
     @app.get("/api/v1/settings", dependencies=protected)
     def settings(session=Depends(db)):
-        pause = session.get(Setting, "delivery_paused")
         test = session.get(Setting, "notification_test")
         last_backup = session.get(Setting, "last_backup")
         return {
             **config.model_dump(exclude={"nmap", "database", "frontend", "backup_directory"}),
             "credentials_configured": bool(secret("PUSHOVER_TOKEN") and secret("PUSHOVER_USER")),
-            "delivery_paused": bool(pause and pause.value.get("paused")),
+            "delivery_paused": delivery_paused(session),
             "port_notifications": "never",
             "notification_test": test.value if test else None,
             "version": "0.1.0",
@@ -623,7 +574,7 @@ def create_app(config: Config | None = None, engine=None):
     def frontend(path: str):
         root = Path(config.frontend).resolve()
         file = (root / path).resolve()
-        if path.startswith(("api/", "health/")):
+        if path.startswith(("api/", "health/", "mcp/", ".well-known/")):
             raise HTTPException(404)
         if file.is_relative_to(root) and file.is_file():
             return FileResponse(file)
