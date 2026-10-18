@@ -1,6 +1,6 @@
 # Network Dragon — progress / handoff
 
-Updated October 16, 2026. Independent implementation; no NetAlertX code/assets. **No live network scans or real notifications have been performed.**
+Updated October 18, 2026. Independent implementation; no NetAlertX code/assets. **No live network scans or real notifications have been performed.**
 
 ## Completed
 
@@ -11,11 +11,12 @@ Updated October 16, 2026. Independent implementation; no NetAlertX code/assets. 
 - Phase 4: transactional outbox; fake and HTTPS Pushover transports; retries, cooldown, mute, stale-outage cancellation, accepted-outage recovery pairing, delivery history, separate explicit test request. Fixture evidence is forbidden from real delivery.
 - Phase 5: responsive dark/light React screens, accessible labels/focus, authentication/CSRF/login limits/password changes, pagination, settings/status, identity alias controls, scans/diagnostics/cancellation. Pages/components separated for maintainability.
 - Phase 6 groundwork: backup/restore with checksums and delivery paused on restore; bounded retention; migration/upgrade docs; shared-image web/worker Compose candidate with safe disabled defaults.
+- Agent access (Oct 18): read-only API tokens (migration `0002`, SHA-256 digests only, `create-token`/`list-tokens`/`revoke-token`, audited, `last_used_at` stamped at most once a minute); a stateless streamable-HTTP MCP endpoint at `/mcp` (official `mcp` SDK) with five compact read-only tools; authenticated OpenAPI at `/api/v1/openapi.json`. Device/event/status/scan queries now live in `api/queries.py`, shared by the API and MCP. Review fixes: notification history uses two batched lookups instead of two per row, and device/event search escapes LIKE wildcards.
 
 ## Verified locally
 
-- **93 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore including invalid manifests, retention, reused-IP port bindings, service evidence freshness, searchable history, and bounded device-list queries). Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
-- Ruff check and format pass; mypy passes for 26 backend source files.
+- **103 pytest tests pass** (domain, API/auth, queue/fencing, provider mocks, identity conflicts, fake Nmap process, backup/restore including invalid manifests, retention, reused-IP port bindings, service evidence freshness, searchable history, and bounded device-list queries, token scope/revocation/expiry, unchanged cookie+CSRF flow, every MCP tool through the real `/mcp` endpoint plus the official MCP client over a live uvicorn socket, authenticated OpenAPI, LIKE-wildcard escaping, batched notification lookups). No real agent has connected over `tailscale serve` yet. Windows API tests require loopback access because asyncio uses a local socket pair; sandboxed calls otherwise hang.
+- Ruff check and format pass; mypy passes for 28 backend source files.
 - TypeScript/Vite production build and Prettier check pass; dependency locks resolve.
 - **3 Playwright workflows pass**: authenticated fixture browsing/editing, evidence search, quiet history, disabled live execution, responsive layouts, themes, logout, hostile-label text rendering, and pagination using the API's returned page size. Initial desktop and dark/light mobile screenshots were visually reviewed in `artifacts/`. `scripts/check_browser.py` owns isolated setup/server teardown.
 - Wheel built offline from cached dependencies; verified application/migration contents, installed into an isolated target, and successfully applied migrations using the installed wheel.

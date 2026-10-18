@@ -192,6 +192,15 @@ class AuthSession(Base):
     expires: Mapped[float]
 
 
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+    token_hash: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(unique=True)
+    created_at: Mapped[float] = mapped_column(default=time.time)
+    last_used_at: Mapped[float | None]
+    expires_at: Mapped[float | None]
+
+
 class LoginLimit(Base):
     __tablename__ = "login_limits"
     key: Mapped[str] = mapped_column(primary_key=True)
