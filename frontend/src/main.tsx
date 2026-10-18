@@ -148,12 +148,6 @@ function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="quiet-note">
-            <ShieldCheck size={18} />
-            <div>
-              Quiet by design<small>Service changes stay in history.</small>
-            </div>
-          </div>
           <div className="user">
             <span className="avatar">A</span>
             <span>
