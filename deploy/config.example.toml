@@ -9,6 +9,7 @@ live_scanning = false
 notifications = false
 allowed_cidrs = []        # Supply your authorized IPv4 CIDR, maximum 256 addresses.
 allowed_interfaces = []   # Supply the actual Linux on-link interface.
+excluded_addresses = []   # Addresses never scanned or recorded, e.g. a honeypot.
 discovery_seconds = 120
 ports_seconds = 900
 routine_ports = "top1000" # Or an explicit list, e.g. "22,80,443,3000,8080".

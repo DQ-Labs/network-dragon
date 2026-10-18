@@ -75,6 +75,25 @@ def test_fixed_arguments_and_execution_revalidation(env):
             arguments(config, network, profile, "192.0.2.1")
 
 
+def test_excluded_address_is_never_scanned(env, ingest_run):
+    ingest_run(
+        xml([("192.0.2.1", "02:00:00:00:00:01", []), ("192.0.2.3", "02:00:00:00:00:03", [])])
+    )
+    config = configured(env)
+    config.excluded_addresses = ["192.0.2.3"]
+    with transaction(env[0]) as s:
+        network = s.get(Network, env[2])
+        discovery, routine = s.get(Profile, "discovery"), s.get(Profile, "routine")
+        args = arguments(config, network, discovery, "192.0.2.0/29")
+        assert args[args.index("--exclude") + 1] == "192.0.2.3"
+        with pytest.raises(ValueError, match="excluded"):
+            arguments(config, network, routine, "192.0.2.3")
+        with pytest.raises(ValueError, match="excluded"):
+            enqueue(s, config, network, routine, "192.0.2.3", now=1001)
+        schedule(s, config, 1001)
+        assert {j.target for j in s.scalars(select(Job))} == {"192.0.2.0/29", "192.0.2.1"}
+
+
 def test_missing_interface_fails_closed(monkeypatch):
     monkeypatch.setattr("psutil.net_if_stats", lambda: {})
     with pytest.raises(ValueError, match="missing or down"):

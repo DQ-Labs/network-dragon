@@ -7,28 +7,46 @@ from conftest import xml
 from network_dragon.domain.ingest import ingest
 from network_dragon.notifications.pushover import Pushover
 from network_dragon.persistence.db import transaction
-from network_dragon.persistence.models import Device, Network, Outbox, Run
+from network_dragon.persistence.models import Address, Device, Event, Network, Outbox, Run
 from network_dragon.scanner import process
 from network_dragon.worker.dispatcher import dispatch_one
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 
-@pytest.mark.parametrize("same_mac", [True, False])
-def test_conflicting_identities_are_withheld(env, ingest_run, same_mac):
-    hosts = [
-        ("192.0.2.1", "02:00:00:00:00:01", []),
-        (
-            "192.0.2.2" if same_mac else "192.0.2.1",
-            "02:00:00:00:00:01" if same_mac else "02:00:00:00:00:02",
-            [],
-        ),
-    ]
+def test_one_address_with_two_macs_is_withheld(env, ingest_run):
+    hosts = [("192.0.2.1", "02:00:00:00:00:01", []), ("192.0.2.1", "02:00:00:00:00:02", [])]
     run_id = ingest_run(xml(hosts))
     with Session(env[0]) as s:
         assert s.get(Run, run_id).status == "partial"
         assert not list(s.scalars(select(Device)))
-        assert s.get(Run, run_id).coverage["identity_conflicts"]
+        assert s.get(Run, run_id).coverage["identity_conflicts"] == ["192.0.2.1"]
+
+
+def test_one_mac_answering_for_several_addresses_is_one_device(env, ingest_run):
+    gateway = "9E:05:D6:BB:B5:47"
+    both = [("192.0.2.3", gateway, []), ("192.0.2.1", gateway, [])]
+    first = ingest_run(xml(both))
+    ingest_run(xml(both, at=1120))
+    ingest_run(xml([("192.0.2.1", gateway, [])], at=1240))
+    with Session(env[0]) as s:
+        assert s.get(Run, first).status == "succeeded"
+        assert s.get(Network, env[2]).health == "healthy"
+        (device,) = s.scalars(select(Device))
+        assert (device.ip, device.presence) == ("192.0.2.1", "online")
+        bindings = {a.address: a.ended_at for a in s.scalars(select(Address))}
+        assert bindings == {"192.0.2.1": None, "192.0.2.3": 1240}
+        assert not list(s.scalars(select(Event).where(Event.type == "identity.address")))
+
+
+def test_excluded_address_is_never_recorded(env, ingest_run):
+    env[1].excluded_addresses = ["192.0.2.3"]
+    hosts = [("192.0.2.1", "02:00:00:00:00:01", []), ("192.0.2.3", "02:00:00:00:00:03", [])]
+    run_id = ingest_run(xml(hosts, total=7))
+    with Session(env[0]) as s:
+        assert s.get(Run, run_id).status == "succeeded"
+        assert [d.ip for d in s.scalars(select(Device))] == ["192.0.2.1"]
+        assert not list(s.scalars(select(Address).where(Address.address == "192.0.2.3")))
 
 
 def test_fixture_never_contacts_real_provider_even_when_enabled(env, ingest_run, monkeypatch):

@@ -133,10 +133,12 @@ This step comes before enabling live scanning because adding the live network ne
 ## 6. Enable live scanning for 192.168.30.0/24 on eth0
 
 1. Edit `/etc/network-dragon/config.toml`: set `live_scanning = true`. Leave `notifications = false`. `allowed_cidrs` and `allowed_interfaces` are already set.
-2. `cd /opt/network-dragon && sudo docker compose restart web worker`.
+2. `cd /opt/network-dragon && sudo docker compose up -d --force-recreate`. Not `restart`: the config is bind-mounted as a single file, and `sed -i` or most editors replace the file, so a restarted container keeps reading the old copy. Recreate the containers after every config change, and check with `sudo docker compose exec web grep live_scanning /run/config.toml`.
 3. In **Settings**, add a network: name `AI-Zone`, CIDR `192.168.30.0/24`, interface `eth0`, mode **live**.
 4. Within about two minutes **Scans** should show a `discovery` job for `192.168.30.0/24` as succeeded, and **Devices** should list hosts with MAC addresses. Dragon's own address (192.168.30.123) is reported without a MAC, because Nmap does not ARP itself.
 5. If the job fails, its diagnostics say why: interface down, route not on-link, or `Nmap failed`. Check `sudo docker compose logs worker` and repeat the capability check in step 2.
+
+Addresses in `excluded_addresses` are passed to Nmap as `--exclude`, are never port-scanned, and are dropped from any evidence. On dragon that is the UniFi honeypot, 192.168.30.3, which answers ARP with the gateway's MAC and alerts on probes. A device answering for several addresses with one MAC is recorded as one device with several active addresses; only one address answered by several MACs is treated as a conflict.
 
 Scanning stays in baseline review at first. Review devices and watch the ones that matter. Turn on `notifications` only after putting the Pushover credentials in the two secret files, restarting, and sending an explicit **Send test notification**.
 

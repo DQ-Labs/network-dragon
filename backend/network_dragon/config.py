@@ -15,6 +15,8 @@ class Config(BaseModel):
     notifications: bool = False
     allowed_cidrs: list[str] = Field(default_factory=list)
     allowed_interfaces: list[str] = Field(default_factory=list)
+    # Addresses never scanned or recorded, e.g. a honeypot that alerts on any probe.
+    excluded_addresses: list[str] = Field(default_factory=list)
     nmap: str = "nmap"
     max_targets: int = Field(default=256, ge=1, le=256)
     discovery_seconds: int = Field(default=120, ge=30, le=86400)
@@ -45,6 +47,13 @@ class Config(BaseModel):
         from ipaddress import ip_address
 
         return [str(ip_address(item)) for item in value]
+
+    @field_validator("excluded_addresses")
+    @classmethod
+    def validate_excluded(cls, value):
+        from ipaddress import IPv4Address
+
+        return sorted({str(IPv4Address(item)) for item in value}, key=IPv4Address)
 
 
 def load_config() -> Config:

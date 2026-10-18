@@ -13,6 +13,9 @@ live_scanning = false
 notifications = false
 allowed_cidrs = ["192.168.30.0/24"]
 allowed_interfaces = ["eth0"]
+# Never scanned, port-probed or recorded. 192.168.30.3 is the UniFi honeypot
+# (it shares the gateway's MAC and alerts on any probe).
+excluded_addresses = ["192.168.30.3"]
 discovery_seconds = 120
 ports_seconds = 900
 routine_ports = "top1000"

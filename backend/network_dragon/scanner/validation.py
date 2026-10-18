@@ -28,6 +28,14 @@ def validate_live(target: str, network, config: Config) -> None:
         r"[A-Za-z0-9_.:-]{1,32}", network.interface
     ):
         raise ValueError("Interface must be explicitly allowlisted")
+    if requested.num_addresses == 1 and str(requested.network_address) in config.excluded_addresses:
+        raise ValueError("Target is excluded from scanning")
+
+
+def excluded(config: Config, target) -> list[str]:
+    """Configured exclusions that fall inside a scan target."""
+    network = ipaddress.IPv4Network(target)
+    return [a for a in config.excluded_addresses if ipaddress.IPv4Address(a) in network]
 
 
 def ports(value: str) -> set[int]:

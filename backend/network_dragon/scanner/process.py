@@ -10,7 +10,7 @@ from pathlib import Path
 
 import psutil
 
-from network_dragon.scanner.validation import ports, validate_live
+from network_dragon.scanner.validation import excluded, ports, validate_live
 from network_dragon.scanner.xml import MAX_XML
 
 
@@ -55,6 +55,8 @@ def arguments(config, network, profile, target):
     args = [config.nmap, "-n", "-e", network.interface]
     if profile.kind == "discovery":
         args += ["-sn", "-PR", "--send-eth", "--privileged"]
+        if skipped := excluded(config, target):
+            args += ["--exclude", ",".join(skipped)]
     else:
         if ipaddress.ip_network(target).num_addresses != 1:
             raise ValueError("Port jobs must target one previously discovered address")
